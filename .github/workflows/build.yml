@@ -66,3 +66,20 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Slim variant: same versions, no local Playwright/Chromium
+      # (INSTALL_BROWSER=false). Tag gets a -slim suffix; no `latest` alias.
+      - name: Build and push slim variant
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            AGENT_VERSION=${{ steps.versions.outputs.agent_version }}
+            HERMES_WEBUI_VERSION=${{ steps.versions.outputs.webui_version }}
+            INSTALL_BROWSER=false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.docker_tag }}-slim
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
