@@ -262,6 +262,11 @@ DASHBOARD_CREDENTIAL=admin:admin
 
 # Include WhatsApp bridge: true, false (default: false)
 ENABLE_WHATSAPP_BRIDGE=false
+
+# Install local Playwright/Chromium browser tooling: true (default), false
+# false produces a smaller/faster-building image tagged `-slim`, for
+# low-resource edge devices (use a cloud browser backend instead)
+ENABLE_BROWSER=true
 ```
 
 | Setting | Options | Default | Description |
@@ -270,6 +275,7 @@ ENABLE_WHATSAPP_BRIDGE=false
 | `USE_SUDO` | `true`, `false` | `false` | Run docker/podman commands with sudo (rootful mode) |
 | `DASHBOARD_CREDENTIAL` | `admin:admin`, `auto`, `user:pass` | `admin:admin` | Dashboard login credential |
 | `ENABLE_WHATSAPP_BRIDGE` | `true`, `false` | `false` | Include WhatsApp bridge in the built image |
+| `ENABLE_BROWSER` | `true`, `false` | `true` | Install local Playwright/Chromium. `false` builds a `-slim` image (measured ~1.1GB smaller on arm64) that also strips the base image's preinstalled Chromium, for low-resource edge devices. |
 
 Then rebuild:
 
@@ -305,6 +311,19 @@ ENABLE_WHATSAPP_BRIDGE=true
 > **Warning:** If you enable the WhatsApp bridge, you **must** configure `WHATSAPP_ALLOWED_USERS`
 > in `~/.hermes/.env` before starting the gateway. Without this setting, the bridge denies all
 > incoming messages by default.
+
+### Browser tooling and the -slim image
+
+Set `ENABLE_BROWSER=false` (or run `./build.sh --no-browser`) to build an image without local browser tooling. The build skips the Playwright/Chromium install stage and removes the base image's preinstalled Chromium, and tags the result with a `-slim` suffix (measured on arm64: 4.44GB full, 3.34GB slim). This is intended for low-resource edge devices, which can use a cloud browser backend instead of local Chromium. The default (`true`) keeps current behavior; `node_modules` is retained either way, since the TUI and dashboard need it.
+
+```bash
+# Option 1: CLI flag
+./build.sh --no-browser
+
+# Option 2: Set in versions.env
+ENABLE_BROWSER=false
+./build.sh
+```
 
 ### Changing the workspace path
 

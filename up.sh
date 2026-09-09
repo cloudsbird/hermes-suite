@@ -9,7 +9,7 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yaml"
 
 # --- Load config from versions.env ---
 if [ -f "${SCRIPT_DIR}/versions.env" ]; then
-    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL)=' "${SCRIPT_DIR}/versions.env")"
+    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL|ENABLE_BROWSER)=' "${SCRIPT_DIR}/versions.env")"
 fi
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-auto}"
 USE_SUDO="${USE_SUDO:-false}"
@@ -56,7 +56,13 @@ fi
 # --- Derive image tag from versions.env ---
 AGENT_VER_CLEAN="${AGENT_VERSION#v}"
 WEBUI_VER_CLEAN="${WEBUI_VERSION#v}"
-export HERMES_SUITE_IMAGE_TAG="${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}"
+# Match build.sh: browser-less builds carry a -slim tag suffix
+ENABLE_BROWSER="${ENABLE_BROWSER:-true}"
+IMAGE_SUFFIX=""
+if [ "$ENABLE_BROWSER" = "false" ]; then
+    IMAGE_SUFFIX="-slim"
+fi
+export HERMES_SUITE_IMAGE_TAG="${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}${IMAGE_SUFFIX}"
 
 # For sudo: compose needs explicit env passthrough
 if [ "$USE_SUDO" = "true" ]; then

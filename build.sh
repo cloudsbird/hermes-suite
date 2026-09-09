@@ -28,7 +28,7 @@ BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- Load pinned versions and runtime from versions.env ---
 if [ -f "${BUILD_DIR}/versions.env" ]; then
-    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|ENABLE_WHATSAPP_BRIDGE)=' "${BUILD_DIR}/versions.env")"
+    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|ENABLE_WHATSAPP_BRIDGE|ENABLE_BROWSER)=' "${BUILD_DIR}/versions.env")"
 else
     echo "ERROR: versions.env not found in ${BUILD_DIR}"
     exit 1
@@ -53,6 +53,8 @@ while [[ $# -gt 0 ]]; do
             USE_SUDO="false"; shift ;;
         --whatsapp)
             ENABLE_WHATSAPP_BRIDGE="true"; shift ;;
+        --no-browser)
+            ENABLE_BROWSER="false"; shift ;;
         *)
             echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -100,7 +102,24 @@ fi
 # Strip 'v' prefix for the compound tag (Docker convention: no 'v')
 AGENT_VER_CLEAN="${AGENT_VERSION#v}"
 WEBUI_VER_CLEAN="${WEBUI_VERSION#v}"
-IMAGE_TAG="ascensionoid/hermes-suite:${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}"
+
+# --- Browser tooling option (ENABLE_BROWSER, default true) ---
+# Skipping Playwright/Chromium produces a smaller, faster-building image
+# for low-resource edge devices. Content-different images get a -slim
+# tag suffix so they cannot be confused with the default image.
+ENABLE_BROWSER="${ENABLE_BROWSER:-true}"
+case "$ENABLE_BROWSER" in
+    true|false) ;;
+    *)
+        echo "ERROR: ENABLE_BROWSER must be true or false (got '$ENABLE_BROWSER')"
+        exit 1
+        ;;
+esac
+IMAGE_SUFFIX=""
+if [ "$ENABLE_BROWSER" = "false" ]; then
+    IMAGE_SUFFIX="-slim"
+fi
+IMAGE_TAG="ascensionoid/hermes-suite:${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}${IMAGE_SUFFIX}"
 
 # --- Patch supervisord.conf for docker-nolog mode ---
 if [ "$BUILD_MODE" = "docker-nolog" ]; then
@@ -116,6 +135,7 @@ echo " Building Hermes Suite"
 echo "=========================================="
 echo " Agent version:  ${AGENT_VERSION}"
 echo " WebUI version:  ${WEBUI_VERSION}"
+echo " Browser:        ${ENABLE_BROWSER}"
 echo " Image tag:      ${IMAGE_TAG}"
 echo " Runtime:        ${CONTAINER_RUNTIME}"
 echo " Sudo:           ${USE_SUDO}"
@@ -129,6 +149,7 @@ if [ "$BUILD_CMD" = "podman" ]; then
         --build-arg AGENT_VERSION="${AGENT_VERSION}" \
         --build-arg HERMES_WEBUI_VERSION="${WEBUI_VERSION}" \
         --build-arg ENABLE_WHATSAPP_BRIDGE="${ENABLE_WHATSAPP_BRIDGE}" \
+        --build-arg INSTALL_BROWSER="${ENABLE_BROWSER}" \
         -t "${IMAGE_TAG}" \
         --format docker \
         "${BUILD_DIR}"
@@ -137,6 +158,7 @@ else
         --build-arg AGENT_VERSION="${AGENT_VERSION}" \
         --build-arg HERMES_WEBUI_VERSION="${WEBUI_VERSION}" \
         --build-arg ENABLE_WHATSAPP_BRIDGE="${ENABLE_WHATSAPP_BRIDGE}" \
+        --build-arg INSTALL_BROWSER="${ENABLE_BROWSER}" \
         -t "${IMAGE_TAG}" \
         "${BUILD_DIR}"
 fi

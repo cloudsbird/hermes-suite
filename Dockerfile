@@ -46,16 +46,28 @@ RUN echo "hermes ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # ---------------------------------------------------------------------------
 # Stage 3: Install Browser tool dependencies for agent
-# npm install + Playwright chromium (needed by browser toolset)
+# npm install + Playwright chromium (needed by browser toolset).
+# Skipped entirely when INSTALL_BROWSER=false (ENABLE_BROWSER=false in
+# versions.env, or ./build.sh --no-browser): the base image ships a
+# preinstalled Chromium under /opt/hermes/.playwright — the skip branch
+# removes it so `-slim` images genuinely exclude local browser binaries
+# (measured on arm64: full 4.44GB -> slim ~3.0GB). Edge devices can use a
+# cloud browser backend instead of local Chromium. node_modules is kept —
+# the TUI and dashboard need it.
 # WhatsApp bridge is removed by default (ENABLE_WHATSAPP_BRIDGE=false).
 # Set --build-arg ENABLE_WHATSAPP_BRIDGE=true or use --whatsapp flag in
 # build.sh to include it.
 # ---------------------------------------------------------------------------
-RUN cd /opt/hermes && \
-    npm install --prefer-offline --no-audit && \
-    npx playwright install --with-deps chromium && \
-    if [ "$ENABLE_WHATSAPP_BRIDGE" != "true" ]; then rm -rf /opt/hermes/scripts/whatsapp-bridge; fi && \
-    rm -rf /var/lib/apt/lists/*
+ARG INSTALL_BROWSER=true
+RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
+        cd /opt/hermes && \
+        npm install --prefer-offline --no-audit && \
+        npx playwright install --with-deps chromium && \
+        rm -rf /var/lib/apt/lists/*; \
+    else \
+        rm -rf /opt/hermes/.playwright; \
+    fi && \
+    if [ "$ENABLE_WHATSAPP_BRIDGE" != "true" ]; then rm -rf /opt/hermes/scripts/whatsapp-bridge; fi
 
 # ---------------------------------------------------------------------------
 # Stage 4: Install supervisord via uv (not available in Debian Trixie apt)
