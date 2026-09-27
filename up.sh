@@ -9,7 +9,7 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yaml"
 
 # --- Load config from versions.env ---
 if [ -f "${SCRIPT_DIR}/versions.env" ]; then
-    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL|ENABLE_BROWSER)=' "${SCRIPT_DIR}/versions.env")"
+    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL|HERMES_WEBUI_PASSWORD|ENABLE_BROWSER)=' "${SCRIPT_DIR}/versions.env")"
 fi
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-auto}"
 USE_SUDO="${USE_SUDO:-false}"
@@ -34,6 +34,18 @@ if [ "$DASHBOARD_CREDENTIAL" = "auto" ]; then
 fi
 
 export DASHBOARD_CREDENTIAL
+
+# --- WebUI password ---
+# Separate mechanism from DASHBOARD_CREDENTIAL — hermes-webui enforces this
+# itself. No default and no "auto" option; unset means no WebUI login.
+export HERMES_WEBUI_PASSWORD="${HERMES_WEBUI_PASSWORD:-}"
+
+# --- Persistent data paths ---
+# Preserve the previous host-path behavior for local Podman/Docker use.
+# docker-compose.yaml falls back to named volumes when these are unset
+# (e.g. under Dokploy or a plain `docker compose up`).
+export HERMES_DATA="${HERMES_DATA:-$HOME/.hermes}"
+export HERMES_WORKSPACE="${HERMES_WORKSPACE:-$HOME/workspace}"
 
 # --- Auto-detect ---
 if [ "$CONTAINER_RUNTIME" = "auto" ]; then
@@ -66,41 +78,19 @@ export HERMES_SUITE_IMAGE_TAG="${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}${IMAGE_SUFF
 
 # For sudo: compose needs explicit env passthrough
 if [ "$USE_SUDO" = "true" ]; then
-    COMPOSE_PREFIX="sudo env HERMES_SUITE_IMAGE_TAG=${HERMES_SUITE_IMAGE_TAG} DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL}"
+    COMPOSE_PREFIX="sudo env HERMES_SUITE_IMAGE_TAG=${HERMES_SUITE_IMAGE_TAG} DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL} HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD} HERMES_DATA=${HERMES_DATA} HERMES_WORKSPACE=${HERMES_WORKSPACE}"
 else
     COMPOSE_PREFIX=""
 fi
 
-# --- Create network and start ---
+# --- Start ---
 case "$CONTAINER_RUNTIME" in
     podman)
         export PATH="$HOME/.local/bin:$PATH"
         PODMAN_COMPOSE="$(command -v podman-compose)"
-        NET_NAME=$(grep -m1 'external: true' "${COMPOSE_FILE}" -B1 | head -1 | sed 's/^[[:space:]]*//' | sed 's/:$//')
-        NET_IP=$(grep -m1 "ipv4_address" "${COMPOSE_FILE}" | sed "s/.*: //" | tr -d "[:space:]")
-        NET_SUBNET=$(echo "$NET_IP" | cut -d. -f1-3).0/24
-        if ! $SUDO_PREFIX podman network exists "$NET_NAME" 2>/dev/null; then
-            echo "Creating network $NET_NAME ($NET_SUBNET)..."
-            $SUDO_PREFIX podman network create --subnet "$NET_SUBNET" "$NET_NAME"
-            # Podman < 4 CNI version fix (firewall plugin doesn't support 1.0.0)
-            PODMAN_VER=$(podman version -f '{{.Version}}' 2>/dev/null | cut -d. -f1)
-            if [ "${PODMAN_VER:-4}" -lt 4 ]; then
-                CNI_FILE=$(find /etc/cni/net.d/ ~/.config/cni/net.d/ -name "${NET_NAME}.conflist" 2>/dev/null | head -1)
-                if [ -n "$CNI_FILE" ]; then
-                    $SUDO_PREFIX sed -i 's/"cniVersion": "1.0.0"/"cniVersion": "0.4.0"/' "$CNI_FILE"
-                fi
-            fi
-        fi
         $COMPOSE_PREFIX "$PODMAN_COMPOSE" -f "${COMPOSE_FILE}" up -d
         ;;
     docker|docker-nolog)
-        NET_NAME=$(grep -m1 'external: true' "${COMPOSE_FILE}" -B1 | head -1 | sed 's/^[[:space:]]*//' | sed 's/:$//')
-        NET_IP=$(grep -m1 "ipv4_address" "${COMPOSE_FILE}" | sed "s/.*: //" | tr -d "[:space:]")
-        NET_SUBNET=$(echo "$NET_IP" | cut -d. -f1-3).0/24
-        if ! $SUDO_PREFIX docker network inspect "$NET_NAME" &>/dev/null; then
-            echo "Creating network $NET_NAME ($NET_SUBNET)..."
-            $SUDO_PREFIX docker network create --subnet "$NET_SUBNET" "$NET_NAME"
-        fi
         $COMPOSE_PREFIX docker compose -f "${COMPOSE_FILE}" up -d
         ;;
     *)
@@ -119,6 +109,11 @@ DASH_USER="${DASHBOARD_CREDENTIAL%%:*}"
 DASH_PASS="${DASHBOARD_CREDENTIAL#*:}"
 echo "  Dashboard Login ID: $DASH_USER"
 echo "  Dashboard Password: $DASH_PASS"
+if [ -n "$HERMES_WEBUI_PASSWORD" ]; then
+    echo "  WebUI Password:     set"
+else
+    echo "  WebUI Password:     NOT SET — no login on the WebUI (see README: WebUI Authentication)"
+fi
 echo ""
 echo "Logs: ./logs.sh"
 echo "Stop: ./down.sh"

@@ -160,6 +160,13 @@ ENV HERMES_WEBUI_AGENT_DIR=/opt/hermes
 # Expose all service ports
 EXPOSE 8642 8787 9119
 
+# Liveness only (any HTTP response counts, not just 2xx) — the gateway's "/"
+# isn't guaranteed to return success, and a strict -f check would also fail
+# on the dashboard's 401 when auth is enabled. This just confirms something
+# is listening on the gateway and webui ports.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD curl -s -o /dev/null http://localhost:8642/ && curl -s -o /dev/null http://localhost:8787/
+
 # Workspace directory
 RUN mkdir -p /workspace
 

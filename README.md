@@ -144,13 +144,7 @@ podman build \
   -t ascensionoid/hermes-suite:2026.7.20-0.52.113 .
 ```
 
-### 3. Create the network (if not already existing)
-
-```bash
-podman network create --subnet 10.99.0.0/24 agent_net
-```
-
-### 4. Start the container
+### 3. Start the container
 
 ```bash
 ./up.sh
@@ -162,13 +156,13 @@ Or manually:
 podman-compose up -d
 ```
 
-### 5. Configure
+### 4. Configure
 
 Edit `~/.hermes/.env` to add your API keys, and `~/.hermes/config.yaml` for model settings.
 These files are shared from the host via the volume mount. On first run, defaults are
 created automatically from the hermes-agent examples.
 
-### 6. Access
+### 5. Access
 
 - Gateway:   http://localhost:8642
 - WebUI:     http://localhost:8787
@@ -206,11 +200,31 @@ Hermes Suite is running:
 When set to `auto`, a random password is generated once and persisted to
 `.dashboard_credential` (in the repo directory) so it survives container restarts.
 
+### WebUI Authentication
+
+The WebUI (port 8787) is a separate project (hermes-webui) with its own,
+unrelated auth mechanism — setting `DASHBOARD_CREDENTIAL` has no effect on
+it. It's controlled by `HERMES_WEBUI_PASSWORD`, which hermes-webui itself
+describes as **required if you expose it beyond `127.0.0.1`** — unset means
+no login on the WebUI at all, so this matters even for a plain `./up.sh`
+setup on a machine reachable from your LAN, not just Dokploy.
+
+Uncomment and set it in `versions.env`:
+
+```env
+HERMES_WEBUI_PASSWORD=some-strong-password
+```
+
+Unlike `DASHBOARD_CREDENTIAL`, there's no `admin:admin` default and no
+`auto` option — leave it unset only if 8787 is truly staying on localhost.
+
 ## Configuration
 
 All configuration is stored in `~/.hermes/` on the host (mounted as `/opt/data` inside
-the container). On first start, the entrypoint script copies default `.env` and
-`config.yaml` from the hermes-agent examples if they don't already exist.
+the container; override the host path with `HERMES_DATA`, see [Deploying with
+Dokploy](#deploying-with-dokploy) for the named-volume alternative). On first start,
+the entrypoint script copies default `.env` and `config.yaml` from the hermes-agent
+examples if they don't already exist.
 
 ```
 ~/.hermes/
@@ -345,12 +359,14 @@ What to expect from a `-slim` runtime:
 
 ### Changing the workspace path
 
-Edit the `volumes` section in `docker-compose.yaml`:
+Set `HERMES_WORKSPACE` before running `./up.sh`, or export it in your shell/`.env`:
 
-```yaml
-volumes:
-  - ~/workspace:/workspace:z   # change ~/workspace to your project directory
+```bash
+HERMES_WORKSPACE=~/my-project ./up.sh
 ```
+
+`~/workspace` is the default. Leaving `HERMES_WORKSPACE` unset entirely (e.g. under
+Dokploy) falls back to a named Docker volume instead of a host path.
 
 ## Migration from Multi-Container Setup
 
@@ -367,7 +383,75 @@ If you are currently running the multi-container setup (hermes-agent + hermes-we
 
 3. Your existing `~/.hermes/` data is reused automatically — no migration needed.
 
+## Deploying with Dokploy
+
+Use `docker-compose.dokploy.yaml` instead of the default compose file — it's tuned
+for a remote VPS deploy instead of local Podman/Docker use:
+
+- Pulls the pre-built image from Docker Hub instead of building on the server
+  (building needs ~10GB disk and network access, and produces a 4GB+ image —
+  too heavy to build on every redeploy).
+- Stores persistent data (`/opt/data`, `/workspace`) in named Docker volumes
+  instead of host bind mounts, since Dokploy's cloned repo directory isn't a
+  reliable place to keep data across redeploys.
+- Has no fixed container name or IP, so it won't collide with other apps on
+  the same host.
+
+### Setup
+
+1. In Dokploy, create a new **Compose** application from this repository.
+2. Set **Compose Path** to `docker-compose.dokploy.yaml`.
+3. In the app's **Environment** tab, set at minimum:
+   ```env
+   DASHBOARD_CREDENTIAL=youruser:yourpassword
+   HERMES_WEBUI_PASSWORD=some-strong-password
+   ```
+   The compose file refuses to start without both. `DASHBOARD_CREDENTIAL`
+   gates the Dashboard (9119) via hermes-agent's own auth. `HERMES_WEBUI_PASSWORD`
+   gates the WebUI (8787) via hermes-webui's own cookie-session login page —
+   it's a separate mechanism with no default; without it the WebUI has no
+   login at all, upstream (see [Dashboard Authentication](#dashboard-authentication)
+   and [hermes-webui's docs](https://github.com/nesquena/hermes-webui/blob/master/.env.docker.example)
+   for each one's details).
+4. Optional overrides (same Environment tab):
+   ```env
+   # Pin a different image tag (see the Version Compatibility Table above),
+   # or add -slim for the browser-less variant.
+   HERMES_SUITE_IMAGE_TAG=2026.7.20-0.52.113
+
+   # Avoid host port collisions with other apps on the same VPS.
+   GATEWAY_PORT=8642
+   WEBUI_PORT=8787
+   DASHBOARD_PORT=9119
+   ```
+5. Deploy. Both services are now safe to reach directly on their host
+   ports — the passwords above are enforced by the apps themselves, not by
+   a proxy in front of them. To put them on your own HTTPS domain instead
+   of raw host ports, add a Dokploy **Domain** for this app (Container Port
+   `8787` for WebUI, `9119` for Dashboard) — that's additive, not required
+   for the login to work.
+
+### Notes
+
+- First boot still needs to create `~/.hermes`-equivalent config inside the
+  `hermes_data` volume (API keys, `config.yaml`, etc.). Use Dokploy's
+  terminal for this app (or `docker exec -it <container> bash`, container
+  name shown in Dokploy's UI since it isn't fixed in this compose file) to
+  edit `/opt/data/.env` and `/opt/data/config.yaml`.
+- Data in `hermes_data` and `hermes_workspace` persists across redeploys as
+  long as you don't delete the volumes.
+
 ## Troubleshooting
+
+### Upgrading from a version that used `agent_net`
+
+Older versions required a pre-created external network (`agent_net`, static IP).
+This is no longer needed — the container no longer joins a custom network. If you
+had it created, it's now unused and safe to remove:
+
+```bash
+podman network rm agent_net   # or: docker network rm agent_net
+```
 
 ### Permission errors on ~/.hermes
 
@@ -460,7 +544,8 @@ hermes-suite/
   versions.env         — Pinned component versions for current release
   supervisord.conf     — Process manager config (3 services)
   start.sh             — Container entrypoint (UID setup + launch)
-  docker-compose.yaml  — Podman/Docker Compose configuration
+  docker-compose.yaml  — Podman/Docker Compose configuration (local use)
+  docker-compose.dokploy.yaml — Compose variant for Dokploy/remote VPS deploys
   build.sh             — Build helper script (reads versions.env)
   up.sh                — Start helper script
   down.sh              — Stop helper script

@@ -1,0 +1,65 @@
+# =============================================================================
+# Hermes Suite — docker-compose.dokploy.yaml
+#
+# Dokploy-ready variant of docker-compose.yaml. Point Dokploy's "Compose
+# file path" at this file instead of the default one. Differences from
+# docker-compose.yaml, and why:
+#
+#   - Pulls the pre-built multi-arch image from Docker Hub instead of
+#     building on the target host. Building needs ~10GB disk, network
+#     access for a git clone + pip install, and produces a 4GB+ image —
+#     too heavy to build on a typical VPS, and it would rebuild on every
+#     redeploy.
+#   - Persistent data lives in named volumes, not host bind mounts.
+#     Dokploy runs this from a cloned repo directory that may not survive
+#     a redeploy, and host paths like ~/.hermes don't exist on the server.
+#   - No container_name and no fixed IP/external network, so a second
+#     deploy of this app (or another compose app) can coexist on the host.
+#   - Host ports are overridable (GATEWAY_PORT/WEBUI_PORT/DASHBOARD_PORT)
+#     to avoid collisions with other apps on a shared VPS.
+#
+# Required setup in the Dokploy UI (Environment tab), before first deploy:
+#   DASHBOARD_CREDENTIAL=youruser:yourpassword   — Dashboard (9119) login.
+#     Do not leave the admin:admin default on a publicly reachable host.
+#   HERMES_WEBUI_PASSWORD=some-strong-password   — WebUI (8787) login.
+#     hermes-webui enforces this itself (cookie-session login page) — it
+#     has no default, and without it the WebUI has NO login at all.
+#
+# Optional overrides:
+#   HERMES_SUITE_IMAGE_TAG   — image tag (default: pinned release below,
+#                              see versions.env for the current pin; add
+#                              -slim for the browser-less image variant)
+#   GATEWAY_PORT / WEBUI_PORT / DASHBOARD_PORT — host port overrides
+#
+# To reach the services on your own HTTPS domain instead of raw host ports,
+# use Dokploy's "Domains" tab for this app (Container Port 8787 / 9119 /
+# 8642 as needed) — it wires up Traefik automatically. The app-level
+# passwords above apply either way; Domains only adds TLS + a hostname.
+# =============================================================================
+
+services:
+  hermes-suite:
+    image: ascensionoid/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-2026.7.20-0.52.113}
+    ports:
+      - "${GATEWAY_PORT:-8642}:8642"
+      - "${WEBUI_PORT:-8787}:8787"
+      - "${DASHBOARD_PORT:-9119}:9119"
+    volumes:
+      - hermes_data:/opt/data
+      - hermes_workspace:/workspace
+    environment:
+      - NODE_ENV=production
+      - HERMES_HOME=/opt/data
+      - HERMES_DATA_DIR=/opt/data
+      - DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL:?Set DASHBOARD_CREDENTIAL in the Dokploy Environment tab, e.g. admin:changeme}
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:?Set HERMES_WEBUI_PASSWORD in the Dokploy Environment tab — hermes-webui has no login without it}
+      - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  hermes_data:
+  hermes_workspace:

@@ -39,6 +39,17 @@ setup_dashboard_auth() {
     export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="$DASH_PASS"
 }
 
+# --- Helper: WebUI password setup ---
+# HERMES_WEBUI_PASSWORD is a separate, unrelated auth mechanism enforced by
+# hermes-webui itself. docker-compose always sets this key (falling back to
+# an empty string when the operator left it unset) — unset it entirely here
+# so hermes-webui sees a genuinely absent variable, not an empty password.
+setup_webui_auth() {
+    if [ -z "${HERMES_WEBUI_PASSWORD:-}" ]; then
+        unset HERMES_WEBUI_PASSWORD
+    fi
+}
+
 # --- Helper: directory and config setup (shared by both paths) ---
 setup_hermes() {
     source "${INSTALL_DIR}/.venv/bin/activate"
@@ -77,6 +88,9 @@ setup_hermes() {
     # --- Dashboard basic auth (upstream v2026.7.1 security hardening) ---
     setup_dashboard_auth
 
+    # --- WebUI password (separate mechanism, see setup_webui_auth) ---
+    setup_webui_auth
+
     # --- Clean up stale PID/lock files from previous container runs ---
     for f in gateway.pid gateway.lock; do
         if [ -f "$HERMES_HOME/$f" ]; then
@@ -99,6 +113,11 @@ print_banner() {
     echo " WebUI:      http://0.0.0.0:8787"
     echo "=========================================="
     echo " Dashboard login: $HERMES_DASHBOARD_BASIC_AUTH_USERNAME / $HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"
+    if [ -n "${HERMES_WEBUI_PASSWORD:-}" ]; then
+        echo " WebUI password:  set"
+    else
+        echo " WebUI password:  NOT SET — no login on the WebUI (see README: WebUI Authentication)"
+    fi
     echo "=========================================="
 }
 

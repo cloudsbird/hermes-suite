@@ -17,11 +17,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ascensionoid/hermes-suite:${HERMES_SUITE_IMAGE_TAG}
+    image: ascensionoid/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-latest}
     container_name: hermes-suite
-    networks:
-      agent_net:
-        ipv4_address: 10.99.0.11
     ports:
       # Gateway (CLI, Telegram, webhook)
       - "8642:8642"
@@ -30,10 +27,14 @@ services:
       # Dashboard (monitoring/analytics)
       - "9119:9119"
     volumes:
-      # Persist config, sessions, skills, memory across restarts
-      - ~/.hermes:/opt/data:Z
-      # Workspace directory — change to your project directory
-      - ~/workspace:/workspace:z
+      # Persist config, sessions, skills, memory across restarts.
+      # Unset HERMES_DATA -> named volume (portable default for plain
+      # `docker compose up`). up.sh exports HERMES_DATA=$HOME/.hermes so
+      # local Podman/Docker users keep the previous host-path behavior.
+      - ${HERMES_DATA:-hermes_data}:/opt/data:Z
+      # Workspace directory. Unset HERMES_WORKSPACE -> named volume;
+      # up.sh exports HERMES_WORKSPACE=$HOME/workspace for local use.
+      - ${HERMES_WORKSPACE:-hermes_workspace}:/workspace:z
       # Clock sync
       - /etc/localtime:/etc/localtime:ro
     environment:
@@ -41,6 +42,9 @@ services:
       - HERMES_HOME=/opt/data
       - HERMES_DATA_DIR=/opt/data
       - DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL:-admin:admin}
+      # Required by hermes-webui itself if this is reachable from anything
+      # other than 127.0.0.1 — unset means no login on the WebUI at all.
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:-}
       - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     restart: unless-stopped
     deploy:
@@ -48,6 +52,6 @@ services:
         limits:
           memory: 4G
 
-networks:
-  agent_net:
-    external: true
+volumes:
+  hermes_data:
+  hermes_workspace:
