@@ -63,10 +63,10 @@ to use **pinned versions** rather than building from the `main` branch HEAD.
 ### Using Pre-Built Images (Recommended)
 
 If you prefer not to build manually, use our pre-verified image tags from
-[Docker Hub](https://hub.docker.com/r/ascensionoid/hermes-suite):
+[GitHub Container Registry](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite):
 
 ```bash
-podman pull ascensionoid/hermes-suite:2026.7.20-0.52.113
+podman pull ghcr.io/cloudsbird/hermes-suite:2026.9.24-0.52.113
 ```
 
 ### Manual Build with Specific Versions
@@ -75,9 +75,9 @@ If you need a specific combination, pass the versions as build arguments:
 
 ```bash
 podman build \
-  --build-arg AGENT_VERSION=v2026.7.20 \
+  --build-arg AGENT_VERSION=v2026.9.24 \
   --build-arg HERMES_WEBUI_VERSION=v0.52.113 \
-  -t hermes-suite:2026.7.20-0.52.113 .
+  -t hermes-suite:2026.9.24-0.52.113 .
 ```
 
 Or use the build helper (reads from `versions.env`):
@@ -93,7 +93,7 @@ Or use the build helper (reads from `versions.env`):
 ./build.sh --docker-nolog
 
 # Override defaults:
-# ./build.sh --agent v2026.7.20 --webui v0.52.113
+# ./build.sh --agent v2026.9.24 --webui v0.52.113
 ```
 
 > **Docker compatibility:** Docker CE is auto-detected at container startup via /proc/1/cgroup.
@@ -107,14 +107,14 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 | Suite Tag | Agent Version | WebUI Version | Tested |
 |-----------|---------------|---------------|--------|
-| `2026.7.20-0.52.113` | v2026.7.20 | v0.52.113 | amd64 + arm64 |
+| `2026.9.24-0.52.113` | v2026.9.24 | v0.52.113 | amd64 + arm64 |
 
 > **Full version history:** https://github.com/sunnysktsang/hermes-suite/releases
 
 ### Version Tag Format
 
 Suite tags follow the pattern `{agent_date}-{webui_semver}`:
-- **Agent**: date-based version from `nousresearch/hermes-agent` (e.g. `v2026.7.20`)
+- **Agent**: date-based version from `nousresearch/hermes-agent` (e.g. `v2026.9.24`)
 - **WebUI**: semantic version from `nesquena/hermes-webui` (e.g. `v0.52.113`)
 
 The pinned pair for each release is declared in `versions.env`.
@@ -139,9 +139,9 @@ Or manually with pinned versions:
 
 ```bash
 podman build \
-  --build-arg AGENT_VERSION=v2026.7.20 \
+  --build-arg AGENT_VERSION=v2026.9.24 \
   --build-arg HERMES_WEBUI_VERSION=v0.52.113 \
-  -t ascensionoid/hermes-suite:2026.7.20-0.52.113 .
+  -t ascensionoid/hermes-suite:2026.9.24-0.52.113 .
 ```
 
 ### 3. Start the container
@@ -262,7 +262,7 @@ podman exec hermes-suite supervisorctl status
 Edit `versions.env` to change the pinned versions and runtime settings:
 
 ```env
-AGENT_VERSION=v2026.7.20
+AGENT_VERSION=v2026.9.24
 WEBUI_VERSION=v0.52.113
 
 # Runtime selector: auto (default), podman, docker, docker-nolog
@@ -417,7 +417,7 @@ for a remote VPS deploy instead of local Podman/Docker use:
    ```env
    # Pin a different image tag (see the Version Compatibility Table above),
    # or add -slim for the browser-less variant.
-   HERMES_SUITE_IMAGE_TAG=2026.7.20-0.52.113
+   HERMES_SUITE_IMAGE_TAG=2026.9.24-0.52.113
 
    # Avoid host port collisions with other apps on the same VPS.
    GATEWAY_PORT=8642

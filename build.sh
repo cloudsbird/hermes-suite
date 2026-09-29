@@ -3,7 +3,7 @@
 # build.sh — Build the Hermes Suite container image
 #
 # Reads pinned versions from versions.env by default.
-# Override with: ./build.sh --agent v2026.7.20 --webui v0.52.113
+# Override with: ./build.sh --agent v2026.9.24 --webui v0.52.113
 #
 # CONTAINER_RUNTIME (from versions.env or CLI flag):
 #   auto         — detect podman first, fall back to docker (default)
