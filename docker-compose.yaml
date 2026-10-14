@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ascensionoid/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-latest}
+    image: ghcr.io/cloudsbird/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-latest}
     container_name: hermes-suite
     ports:
       # Gateway (CLI, Telegram, webhook)

@@ -60,14 +60,14 @@ echo "== default: browser installed, tag unchanged =="
 fresh_repo
 run_build def
 eq "exit code" "0" "$?"
-eq "image tag has no suffix" "ascensionoid/hermes-suite:${EXPECTED_TAG}" "$(tag_of def)"
+eq "image tag has no suffix" "ghcr.io/cloudsbird/hermes-suite:${EXPECTED_TAG}" "$(tag_of def)"
 grep -q -- '--build-arg INSTALL_BROWSER=true' "${WORK}/def.args" && ok "INSTALL_BROWSER=true passed" || bad "INSTALL_BROWSER=true passed"
 
 echo "== --no-browser flag: skipped, -slim suffix =="
 fresh_repo
 run_build nb --no-browser
 eq "exit code" "0" "$?"
-eq "image tag -slim suffix" "ascensionoid/hermes-suite:${EXPECTED_TAG}-slim" "$(tag_of nb)"
+eq "image tag -slim suffix" "ghcr.io/cloudsbird/hermes-suite:${EXPECTED_TAG}-slim" "$(tag_of nb)"
 grep -q -- '--build-arg INSTALL_BROWSER=false' "${WORK}/nb.args" && ok "INSTALL_BROWSER=false passed" || bad "INSTALL_BROWSER=false passed"
 grep -q 'Browser:        false' "${WORK}/nb.out" && ok "summary shows Browser: false" || bad "summary shows Browser: false"
 
@@ -76,7 +76,7 @@ fresh_repo
 sed -i 's/^#ENABLE_BROWSER=false/ENABLE_BROWSER=false/' "${WORK}/repo/versions.env"
 run_build envf
 eq "exit code" "0" "$?"
-eq "image tag -slim suffix" "ascensionoid/hermes-suite:${EXPECTED_TAG}-slim" "$(tag_of envf)"
+eq "image tag -slim suffix" "ghcr.io/cloudsbird/hermes-suite:${EXPECTED_TAG}-slim" "$(tag_of envf)"
 grep -q -- '--build-arg INSTALL_BROWSER=false' "${WORK}/envf.args" && ok "INSTALL_BROWSER=false passed" || bad "INSTALL_BROWSER=false passed"
 
 echo "== flag overrides versions.env (explicit true wins over file) =="
@@ -85,7 +85,7 @@ sed -i 's/^#ENABLE_BROWSER=false/ENABLE_BROWSER=false/' "${WORK}/repo/versions.e
 # --browser force-true over a file false is covered in a later section.
 # Here: file false + --agent override still slim:
 run_build ov --agent v2026.7.7.2
-eq "override keeps -slim" "ascensionoid/hermes-suite:${OVERRIDE_TAG}" "$(tag_of ov)"
+eq "override keeps -slim" "ghcr.io/cloudsbird/hermes-suite:${OVERRIDE_TAG}" "$(tag_of ov)"
 grep -q -- '--build-arg AGENT_VERSION=v2026.7.7.2' "${WORK}/ov.args" && ok "agent override passed" || bad "agent override passed"
 
 echo "== invalid ENABLE_BROWSER rejected =="
@@ -170,7 +170,7 @@ fresh_repo
 sed -i 's/^#ENABLE_BROWSER=false/ENABLE_BROWSER=false/' "${WORK}/repo/versions.env"
 run_build fb --browser
 eq "exit code" "0" "$?"
-eq "--browser over file-false: full tag, no suffix" "ascensionoid/hermes-suite:${EXPECTED_TAG}" "$(tag_of fb)"
+eq "--browser over file-false: full tag, no suffix" "ghcr.io/cloudsbird/hermes-suite:${EXPECTED_TAG}" "$(tag_of fb)"
 grep -q -- '--build-arg INSTALL_BROWSER=true' "${WORK}/fb.args" && ok "INSTALL_BROWSER=true passed" || bad "INSTALL_BROWSER=true passed"
 grep -q '^ENABLE_BROWSER=true' "${WORK}/repo/versions.env" && ok "file flipped back to true" || bad "file flipped back to true"
 

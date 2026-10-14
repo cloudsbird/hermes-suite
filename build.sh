@@ -121,7 +121,7 @@ IMAGE_SUFFIX=""
 if [ "$ENABLE_BROWSER" = "false" ]; then
     IMAGE_SUFFIX="-slim"
 fi
-IMAGE_TAG="ascensionoid/hermes-suite:${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}${IMAGE_SUFFIX}"
+IMAGE_TAG="ghcr.io/cloudsbird/hermes-suite:${AGENT_VER_CLEAN}-${WEBUI_VER_CLEAN}${IMAGE_SUFFIX}"
 
 # Persist the effective browser setting back to versions.env when it deviates
 # from what the file records. up.sh/down.sh derive the image tag from

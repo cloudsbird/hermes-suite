@@ -1,5 +1,4 @@
 # Hermes Suite — All-in-One Container Image
-![Docker Pulls](https://badgen.net/docker/pulls/ascensionoid/hermes-suite)
 
 Single Docker/Podman image combining three Hermes services:
 
@@ -9,7 +8,7 @@ Single Docker/Podman image combining three Hermes services:
 | hermes-dashboard | 9119 | Monitoring/analytics dashboard (built-in) |
 | hermes-webui | 8787 | Browser-based chat interface |
 
-Pre-built multi-arch images available on [Docker Hub](https://hub.docker.com/r/ascensionoid/hermes-suite?ref=2).
+Pre-built multi-arch images available on [GHCR](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite).
 
 > **🎉 Now with automatic runtime detection.** One image works on both Podman and Docker CE out of the box — no separate builds or flags needed. The container detects its runtime at startup and adjusts automatically. [Learn more](#changing-component-versions).
 
@@ -141,7 +140,7 @@ Or manually with pinned versions:
 podman build \
   --build-arg AGENT_VERSION=v2026.9.24 \
   --build-arg HERMES_WEBUI_VERSION=v0.52.113 \
-  -t ascensionoid/hermes-suite:2026.9.24-0.52.113 .
+  -t ghcr.io/cloudsbird/hermes-suite:2026.9.24-0.52.113 .
 ```
 
 ### 3. Start the container
@@ -388,7 +387,7 @@ If you are currently running the multi-container setup (hermes-agent + hermes-we
 Use `docker-compose.dokploy.yaml` instead of the default compose file — it's tuned
 for a remote VPS deploy instead of local Podman/Docker use:
 
-- Pulls the pre-built image from Docker Hub instead of building on the server
+- Pulls the pre-built image from GHCR instead of building on the server
   (building needs ~10GB disk and network access, and produces a 4GB+ image —
   too heavy to build on every redeploy).
 - Stores persistent data (`/opt/data`, `/workspace`) in named Docker volumes

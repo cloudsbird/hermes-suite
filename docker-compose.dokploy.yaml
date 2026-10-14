@@ -5,7 +5,7 @@
 # file path" at this file instead of the default one. Differences from
 # docker-compose.yaml, and why:
 #
-#   - Pulls the pre-built multi-arch image from Docker Hub instead of
+#   - Pulls the pre-built multi-arch image from GHCR instead of
 #     building on the target host. Building needs ~10GB disk, network
 #     access for a git clone + pip install, and produces a 4GB+ image —
 #     too heavy to build on a typical VPS, and it would rebuild on every
