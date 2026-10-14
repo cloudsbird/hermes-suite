@@ -31,8 +31,11 @@ jobs:
 
           # Extract agent and webui versions from the compound tag
           # 2026.4.30-0.50.278 -> agent=2026.4.30, webui=0.50.278
-          AGENT_VER="${DOCKER_TAG%-*}"
-          WEBUI_VER="${DOCKER_TAG##*-}"
+          # An optional -rN revision suffix (e.g. 2026.9.24-0.52.113-r1) re-releases
+          # the same agent/webui pair and is ignored for the version split.
+          BASE_TAG="${DOCKER_TAG%-r[0-9]*}"
+          AGENT_VER="${BASE_TAG%-*}"
+          WEBUI_VER="${BASE_TAG##*-}"
           echo "agent_version=v${AGENT_VER}" >> "$GITHUB_OUTPUT"
           echo "webui_version=v${WEBUI_VER}" >> "$GITHUB_OUTPUT"
 
