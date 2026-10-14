@@ -96,13 +96,16 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 # google-chat) so the webui's in-process agent has working memory and
 # provider backends (#16).
 #
+# uv's managed Python must live outside /root (mode 0700), or the unprivileged
+# hermes user cannot exec the venv interpreter (EACCES). Hence /opt/uv-python.
+#
 # PIN to a specific tag for reproducible builds — never use 'master'.
 # ---------------------------------------------------------------------------
 ARG HERMES_WEBUI_VERSION=v0.52.113
 RUN cd /opt && \
     git clone --depth 1 --branch ${HERMES_WEBUI_VERSION} \
         https://github.com/nesquena/hermes-webui.git hermes-webui && \
-    uv venv /opt/hermes-webui/venv && \
+    UV_PYTHON_INSTALL_DIR=/opt/uv-python uv venv /opt/hermes-webui/venv && \
     uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
     uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -e "/opt/hermes[all,messaging,otlp,anthropic,bedrock,azure-identity,matrix,google-chat]" && \
     rm -rf /opt/hermes-webui/.git
