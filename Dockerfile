@@ -17,7 +17,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Use the official hermes-agent image as the base
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
-# the built-in web dashboard (hermes dashboard), the gateway, uv, and s6-overlay.
+# the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
 ARG AGENT_VERSION=v0.22.1
 ARG ENABLE_WHATSAPP_BRIDGE=false
@@ -77,7 +77,11 @@ RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
 # ---------------------------------------------------------------------------
 # Stage 4: Install supervisord via uv (not available in Debian Trixie apt)
 # We install it into a dedicated venv at /opt/supervisor.
+# The base image no longer guarantees uv on PATH (v0.22.1 dropped it), so we
+# take a pinned static binary from Astral's official multi-arch image.
 # ---------------------------------------------------------------------------
+COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /usr/local/bin/
+
 RUN uv venv /opt/supervisor && \
     uv pip install --python /opt/supervisor/bin/python3 supervisor && \
     ln -sf /opt/supervisor/bin/supervisord /usr/local/bin/supervisord && \
