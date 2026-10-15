@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Started by auto-update.yml (tag pushes made with GITHUB_TOKEN don't fire
+  # the push trigger). Must be run with --ref <tag> so GITHUB_REF_NAME is the tag.
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

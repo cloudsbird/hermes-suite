@@ -1,0 +1,129 @@
+name: Auto-update upstream versions
+
+# Checks for new hermes-agent / hermes-webui releases. When either changed it
+# bumps every pinned reference, commits to main, pushes a release tag
+# (vAGENT-WEBUI) and dispatches build.yml for that tag.
+#
+# Why dispatch instead of relying on the tag push: events created with the
+# default GITHUB_TOKEN (like a tag push) do not trigger other workflows, but
+# workflow_dispatch is the documented exception.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: auto-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Detect new upstream releases
+        id: detect
+        run: |
+          set -euo pipefail
+          . ./versions.env
+          OLD_AGENT="${AGENT_VERSION}"
+          OLD_WEBUI="${WEBUI_VERSION}"
+
+          # releases/latest excludes prereleases and drafts (e.g. webui exp-* builds)
+          NEW_AGENT="$(gh api repos/NousResearch/hermes-agent/releases/latest --jq .tag_name)"
+          NEW_WEBUI="$(gh api repos/nesquena/hermes-webui/releases/latest --jq .tag_name)"
+          echo "agent: ${OLD_AGENT} -> ${NEW_AGENT}"
+          echo "webui: ${OLD_WEBUI} -> ${NEW_WEBUI}"
+
+          # Only the format we build tags from: vN.N.N
+          for v in "${NEW_AGENT}" "${NEW_WEBUI}"; do
+            [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected version format: $v"; exit 1; }
+          done
+
+          if [ "${NEW_AGENT}" = "${OLD_AGENT}" ] && [ "${NEW_WEBUI}" = "${OLD_WEBUI}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The base image is pulled from Docker Hub; a GitHub release can land
+          # before its image does. Skip and retry on the next run.
+          if [ "${NEW_AGENT}" != "${OLD_AGENT}" ] && \
+             ! docker manifest inspect "docker.io/nousresearch/hermes-agent:${NEW_AGENT}" >/dev/null 2>&1; then
+            echo "Image nousresearch/hermes-agent:${NEW_AGENT} not on Docker Hub yet; will retry."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TAG="v${NEW_AGENT#v}-${NEW_WEBUI#v}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "changed=true"
+            echo "old_agent=${OLD_AGENT}"
+            echo "old_webui=${OLD_WEBUI}"
+            echo "new_agent=${NEW_AGENT}"
+            echo "new_webui=${NEW_WEBUI}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump pinned versions
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          OLD_AGENT: ${{ steps.detect.outputs.old_agent }}
+          OLD_WEBUI: ${{ steps.detect.outputs.old_webui }}
+          NEW_AGENT: ${{ steps.detect.outputs.new_agent }}
+          NEW_WEBUI: ${{ steps.detect.outputs.new_webui }}
+        run: |
+          set -euo pipefail
+          esc() { printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g'; }
+
+          # Compound image tag first (2026.9.24-0.52.113), then the v-prefixed
+          # individual versions. Order matters so the compound form is not
+          # half-rewritten.
+          OLD_COMPOUND="${OLD_AGENT#v}-${OLD_WEBUI#v}"
+          NEW_COMPOUND="${NEW_AGENT#v}-${NEW_WEBUI#v}"
+
+          FILES="$(git ls-files versions.env Dockerfile README.md build.sh .env.example docker-compose.yaml docker-compose.dokploy.yaml)"
+          for f in ${FILES}; do
+            sed -i \
+              -e "s/$(esc "${OLD_COMPOUND}")/${NEW_COMPOUND}/g" \
+              -e "s/$(esc "${OLD_AGENT}")/${NEW_AGENT}/g" \
+              -e "s/$(esc "${OLD_WEBUI}")/${NEW_WEBUI}/g" \
+              "$f"
+          done
+
+          # Sanity: no stale pins left
+          if grep -rnF -e "${OLD_AGENT}" -e "${OLD_WEBUI}" ${FILES}; then
+            echo "Stale references remain after bump"; exit 1
+          fi
+          git diff --stat
+
+      - name: Commit, tag and trigger build
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+          NEW_AGENT: ${{ steps.detect.outputs.new_agent }}
+          NEW_WEBUI: ${{ steps.detect.outputs.new_webui }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "feat: release ${TAG} (agent ${NEW_AGENT}, webui ${NEW_WEBUI})"
+          git tag "${TAG}"
+          git push origin main "refs/tags/${TAG}"
+          gh workflow run build.yml --ref "${TAG}"

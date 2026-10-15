@@ -54,6 +54,15 @@ services:
       - DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL:?Set DASHBOARD_CREDENTIAL in the Dokploy Environment tab, e.g. admin:changeme}
       - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:?Set HERMES_WEBUI_PASSWORD in the Dokploy Environment tab — hermes-webui has no login without it}
       - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    # Overrides the image healthcheck so already-built images work too. Only
+    # the WebUI port is checked: Traefik hides unhealthy containers (404), and
+    # gateway port 8642 isn't listening unless a platform/API server is enabled.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8787/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
     restart: unless-stopped
     deploy:
       resources:
