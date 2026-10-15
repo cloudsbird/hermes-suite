@@ -10,7 +10,7 @@
 #   hermes-dashboard — Built-in monitoring dashboard on port 9119
 #   hermes-webui     — Browser chat interface on port 8787
 #
-# Build:  podman build -t hermes-suite:2026.9.24-0.52.113 .
+# Build:  podman build -t hermes-suite:0.22.1-0.52.458 .
 # Run:    podman-compose up -d
 # =============================================================================
 
@@ -19,7 +19,7 @@
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
 # the built-in web dashboard (hermes dashboard), the gateway, uv, and s6-overlay.
 # ---------------------------------------------------------------------------
-ARG AGENT_VERSION=v2026.9.24
+ARG AGENT_VERSION=v0.22.1
 ARG ENABLE_WHATSAPP_BRIDGE=false
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
 
@@ -101,7 +101,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 #
 # PIN to a specific tag for reproducible builds — never use 'master'.
 # ---------------------------------------------------------------------------
-ARG HERMES_WEBUI_VERSION=v0.52.113
+ARG HERMES_WEBUI_VERSION=v0.52.458
 RUN cd /opt && \
     git clone --depth 1 --branch ${HERMES_WEBUI_VERSION} \
         https://github.com/nesquena/hermes-webui.git hermes-webui && \
@@ -135,9 +135,9 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 # Stage 7: Environment, labels, and runtime config
 # ---------------------------------------------------------------------------
 # Re-declare ARGs after FROM so they are available in LABEL
-ARG AGENT_VERSION=v2026.9.24
+ARG AGENT_VERSION=v0.22.1
 ARG ENABLE_WHATSAPP_BRIDGE=false
-ARG HERMES_WEBUI_VERSION=v0.52.113
+ARG HERMES_WEBUI_VERSION=v0.52.458
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
