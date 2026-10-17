@@ -39,7 +39,7 @@
 
 services:
   hermes-suite:
-    image: ghcr.io/cloudsbird/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-0.22.1-0.52.458}
+    image: ghcr.io/cloudsbird/hermes-suite:${HERMES_SUITE_IMAGE_TAG:-0.22.2-0.52.458}
     ports:
       - "${GATEWAY_PORT:-8642}:8642"
       - "${WEBUI_PORT:-8787}:8787"
