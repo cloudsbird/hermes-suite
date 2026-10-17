@@ -107,8 +107,12 @@ jobs:
               "$f"
           done
 
-          # Sanity: no stale pins left
-          if grep -rnF -e "${OLD_AGENT}" -e "${OLD_WEBUI}" ${FILES}; then
+          # Sanity: no stale pins left. Only check components that actually
+          # changed — an unchanged one legitimately still appears in the files.
+          STALE=()
+          [ "${OLD_AGENT}" != "${NEW_AGENT}" ] && STALE+=(-e "${OLD_AGENT}")
+          [ "${OLD_WEBUI}" != "${NEW_WEBUI}" ] && STALE+=(-e "${OLD_WEBUI}")
+          if grep -rnF "${STALE[@]}" ${FILES}; then
             echo "Stale references remain after bump"; exit 1
           fi
           git diff --stat
