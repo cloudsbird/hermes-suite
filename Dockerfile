@@ -103,6 +103,10 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 # uv's managed Python must live outside /root (mode 0700), or the unprivileged
 # hermes user cannot exec the venv interpreter (EACCES). Hence /opt/uv-python.
 #
+# The agent resolves some conflicts via [tool.uv] override-dependencies (e.g.
+# Pillow==13.0.0 over browser-harness's pillow==12.3.0 pin since v0.22.5).
+# `uv pip install` ignores those, so extract them and pass --override.
+#
 # PIN to a specific tag for reproducible builds — never use 'master'.
 # ---------------------------------------------------------------------------
 ARG HERMES_WEBUI_VERSION=v0.52.544
@@ -111,8 +115,9 @@ RUN cd /opt && \
         https://github.com/nesquena/hermes-webui.git hermes-webui && \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python uv venv /opt/hermes-webui/venv && \
     uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
-    uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -e "/opt/hermes[all,messaging,otlp,anthropic,bedrock,azure-identity,matrix,google-chat]" && \
-    rm -rf /opt/hermes-webui/.git
+    /opt/hermes-webui/venv/bin/python3 -c "import tomllib; print('\n'.join(tomllib.load(open('/opt/hermes/pyproject.toml', 'rb')).get('tool', {}).get('uv', {}).get('override-dependencies', [])))" > /tmp/agent-overrides.txt && \
+    uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir --override /tmp/agent-overrides.txt -e "/opt/hermes[all,messaging,otlp,anthropic,bedrock,azure-identity,matrix,google-chat]" && \
+    rm -rf /opt/hermes-webui/.git /tmp/agent-overrides.txt
 
 # Bake version tag into the webui
 RUN echo "__version__ = '${HERMES_WEBUI_VERSION}'" > /opt/hermes-webui/api/_version.py
