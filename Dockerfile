@@ -10,7 +10,7 @@
 #   hermes-dashboard — Built-in monitoring dashboard on port 9119
 #   hermes-webui     — Browser chat interface on port 8787
 #
-# Build:  podman build -t hermes-suite:0.22.5-0.52.544 .
+# Build:  podman build -t hermes-suite:0.22.6-0.52.544 .
 # Run:    podman-compose up -d
 # =============================================================================
 
@@ -19,7 +19,7 @@
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
 # the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
-ARG AGENT_VERSION=v0.22.5
+ARG AGENT_VERSION=v0.22.6
 ARG ENABLE_WHATSAPP_BRIDGE=false
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
 
@@ -77,7 +77,7 @@ RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
 # ---------------------------------------------------------------------------
 # Stage 4: Install supervisord via uv (not available in Debian Trixie apt)
 # We install it into a dedicated venv at /opt/supervisor.
-# The base image no longer guarantees uv on PATH (v0.22.5 dropped it), so we
+# The base image no longer guarantees uv on PATH (v0.22.6 dropped it), so we
 # take a pinned static binary from Astral's official multi-arch image.
 # ---------------------------------------------------------------------------
 COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /usr/local/bin/
@@ -104,7 +104,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 # hermes user cannot exec the venv interpreter (EACCES). Hence /opt/uv-python.
 #
 # The agent resolves some conflicts via [tool.uv] override-dependencies (e.g.
-# Pillow==13.0.0 over browser-harness's pillow==12.3.0 pin since v0.22.5).
+# Pillow==13.0.0 over browser-harness's pillow==12.3.0 pin since v0.22.6).
 # `uv pip install` ignores those, so extract them and pass --override.
 #
 # PIN to a specific tag for reproducible builds — never use 'master'.
@@ -144,7 +144,7 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 # Stage 7: Environment, labels, and runtime config
 # ---------------------------------------------------------------------------
 # Re-declare ARGs after FROM so they are available in LABEL
-ARG AGENT_VERSION=v0.22.5
+ARG AGENT_VERSION=v0.22.6
 ARG ENABLE_WHATSAPP_BRIDGE=false
 ARG HERMES_WEBUI_VERSION=v0.52.544
 
