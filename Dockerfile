@@ -25,7 +25,10 @@ ARG ENABLE_WHATSAPP_BRIDGE=false
 # is statically linked: the binary needs only glibc + libstdc++.
 # PORTCULLIS_VERSION is a commit SHA (the project has no release tags yet).
 # ---------------------------------------------------------------------------
-FROM docker.io/library/rust:1-slim-bookworm AS portcullis-builder
+# Built on Debian trixie, the same release as the hermes-agent base image:
+# ort's prebuilt static ONNX Runtime needs glibc >= 2.38 and GCC >= 13
+# (__isoc23_strtol, _M_replace_cold), which bookworm (2.36 / GCC 12) lacks.
+FROM docker.io/library/rust:1-slim-trixie AS portcullis-builder
 ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates pkg-config libssl-dev cmake clang \
