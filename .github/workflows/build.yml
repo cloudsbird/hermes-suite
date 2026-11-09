@@ -12,13 +12,19 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Each architecture builds natively on its own GitHub-hosted runner (no QEMU
+# emulation): amd64 on ubuntu-24.04, arm64 on ubuntu-24.04-arm. Every
+# platform/variant pushes an untagged image by digest; the merge job then
+# stitches the per-arch digests into the multi-arch tags users pull.
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+    outputs:
+      docker_tag: ${{ steps.versions.outputs.docker_tag }}
+      agent_version: ${{ steps.versions.outputs.agent_version }}
+      webui_version: ${{ steps.versions.outputs.webui_version }}
+      portcullis_version: ${{ steps.versions.outputs.portcullis_version }}
+      image: ${{ steps.versions.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,12 +53,38 @@ jobs:
           [ -n "${PORTCULLIS_VER}" ] || { echo "PORTCULLIS_VERSION missing from versions.env"; exit 1; }
           echo "portcullis_version=${PORTCULLIS_VER}" >> "$GITHUB_OUTPUT"
 
+          # Registry paths must be lowercase.
+          echo "image=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+
           echo "Suite tag:     ${DOCKER_TAG}"
           echo "Agent version: v${AGENT_VER}"
           echo "WebUI version: v${WEBUI_VER}"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        # full = default image; slim = no local Playwright/Chromium
+        variant: [full, slim]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - variant: full
+            install_browser: "true"
+          - variant: slim
+            install_browser: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -64,36 +96,86 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
+          platforms: linux/${{ matrix.arch }}
           build-args: |
-            AGENT_VERSION=${{ steps.versions.outputs.agent_version }}
-            HERMES_WEBUI_VERSION=${{ steps.versions.outputs.webui_version }}
-            PORTCULLIS_VERSION=${{ steps.versions.outputs.portcullis_version }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.docker_tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            AGENT_VERSION=${{ needs.prepare.outputs.agent_version }}
+            HERMES_WEBUI_VERSION=${{ needs.prepare.outputs.webui_version }}
+            PORTCULLIS_VERSION=${{ needs.prepare.outputs.portcullis_version }}
+            INSTALL_BROWSER=${{ matrix.install_browser }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # Separate cache per arch/variant so runners don't evict each other.
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.arch }}
 
-      # Slim variant: same versions, no local Playwright/Chromium
-      # (INSTALL_BROWSER=false). Tag gets a -slim suffix; no `latest` alias.
-      - name: Build and push slim variant
-        uses: docker/build-push-action@v6
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            AGENT_VERSION=${{ steps.versions.outputs.agent_version }}
-            HERMES_WEBUI_VERSION=${{ steps.versions.outputs.webui_version }}
-            PORTCULLIS_VERSION=${{ steps.versions.outputs.portcullis_version }}
-            INSTALL_BROWSER=false
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.docker_tag }}-slim
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: digests-${{ matrix.variant }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        variant: [full, slim]
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.variant }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          DOCKER_TAG: ${{ needs.prepare.outputs.docker_tag }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          # full -> <tag> + latest; slim -> <tag>-slim only (no `latest` alias)
+          if [ "${VARIANT}" = "full" ]; then
+            TAGS=(-t "${IMAGE}:${DOCKER_TAG}" -t "${IMAGE}:latest")
+          else
+            TAGS=(-t "${IMAGE}:${DOCKER_TAG}-slim")
+          fi
+          SOURCES=()
+          for d in *; do SOURCES+=("${IMAGE}@sha256:${d}"); done
+          [ "${#SOURCES[@]}" -eq 2 ] || { echo "Expected 2 digests, got ${#SOURCES[@]}"; exit 1; }
+          docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"
+
+      - name: Inspect
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          DOCKER_TAG: ${{ needs.prepare.outputs.docker_tag }}
+          SUFFIX: ${{ matrix.variant == 'slim' && '-slim' || '' }}
+        run: docker buildx imagetools inspect "${IMAGE}:${DOCKER_TAG}${SUFFIX}"
