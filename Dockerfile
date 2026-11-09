@@ -15,7 +15,7 @@
 # Run:    podman-compose up -d
 # =============================================================================
 
-ARG AGENT_VERSION=v0.22.1
+ARG AGENT_VERSION=v0.23.0
 ARG ENABLE_WHATSAPP_BRIDGE=false
 
 # ---------------------------------------------------------------------------
@@ -43,11 +43,6 @@ RUN git init -q . && \
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
 # the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
-=======
-ARG AGENT_VERSION=v0.23.0
-ARG ENABLE_WHATSAPP_BRIDGE=false
->>>>>>> 347276f1d14364859c1cb00e64d9b5da327392fa
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
 
 USER root
@@ -178,12 +173,8 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 # Re-declare ARGs after FROM so they are available in LABEL
 ARG AGENT_VERSION=v0.23.0
 ARG ENABLE_WHATSAPP_BRIDGE=false
-<<<<<<< HEAD
-ARG HERMES_WEBUI_VERSION=v0.52.458
-ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
-=======
 ARG HERMES_WEBUI_VERSION=v0.52.544
->>>>>>> 347276f1d14364859c1cb00e64d9b5da327392fa
+ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
