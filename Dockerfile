@@ -11,7 +11,7 @@
 #   hermes-webui     — Browser chat interface on port 8787
 #   portcullis       — PII-redacting LLM gateway on 127.0.0.1:8080 (internal)
 #
-# Build:  podman build -t hermes-suite:0.22.1-0.52.458 .
+# Build:  podman build -t hermes-suite:0.23.0-0.52.544 .
 # Run:    podman-compose up -d
 # =============================================================================
 
@@ -43,6 +43,11 @@ RUN git init -q . && \
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
 # the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
+<<<<<<< HEAD
+=======
+ARG AGENT_VERSION=v0.23.0
+ARG ENABLE_WHATSAPP_BRIDGE=false
+>>>>>>> 347276f1d14364859c1cb00e64d9b5da327392fa
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
 
 USER root
@@ -99,7 +104,7 @@ RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
 # ---------------------------------------------------------------------------
 # Stage 4: Install supervisord via uv (not available in Debian Trixie apt)
 # We install it into a dedicated venv at /opt/supervisor.
-# The base image no longer guarantees uv on PATH (v0.22.1 dropped it), so we
+# The base image no longer guarantees uv on PATH (v0.23.0 dropped it), so we
 # take a pinned static binary from Astral's official multi-arch image.
 # ---------------------------------------------------------------------------
 COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /usr/local/bin/
@@ -125,16 +130,21 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 # uv's managed Python must live outside /root (mode 0700), or the unprivileged
 # hermes user cannot exec the venv interpreter (EACCES). Hence /opt/uv-python.
 #
+# The agent resolves some conflicts via [tool.uv] override-dependencies (e.g.
+# Pillow==13.0.0 over browser-harness's pillow==12.3.0 pin since v0.23.0).
+# `uv pip install` ignores those, so extract them and pass --override.
+#
 # PIN to a specific tag for reproducible builds — never use 'master'.
 # ---------------------------------------------------------------------------
-ARG HERMES_WEBUI_VERSION=v0.52.458
+ARG HERMES_WEBUI_VERSION=v0.52.544
 RUN cd /opt && \
     git clone --depth 1 --branch ${HERMES_WEBUI_VERSION} \
         https://github.com/nesquena/hermes-webui.git hermes-webui && \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python uv venv /opt/hermes-webui/venv && \
     uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
-    uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir -e "/opt/hermes[all,messaging,otlp,anthropic,bedrock,azure-identity,matrix,google-chat]" && \
-    rm -rf /opt/hermes-webui/.git
+    /opt/hermes-webui/venv/bin/python3 -c "import tomllib; print('\n'.join(tomllib.load(open('/opt/hermes/pyproject.toml', 'rb')).get('tool', {}).get('uv', {}).get('override-dependencies', [])))" > /tmp/agent-overrides.txt && \
+    uv pip install --python /opt/hermes-webui/venv/bin/python3 --no-cache-dir --override /tmp/agent-overrides.txt -e "/opt/hermes[all,messaging,otlp,anthropic,bedrock,azure-identity,matrix,google-chat]" && \
+    rm -rf /opt/hermes-webui/.git /tmp/agent-overrides.txt
 
 # Bake version tag into the webui
 RUN echo "__version__ = '${HERMES_WEBUI_VERSION}'" > /opt/hermes-webui/api/_version.py
@@ -166,10 +176,14 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 # Stage 7: Environment, labels, and runtime config
 # ---------------------------------------------------------------------------
 # Re-declare ARGs after FROM so they are available in LABEL
-ARG AGENT_VERSION=v0.22.1
+ARG AGENT_VERSION=v0.23.0
 ARG ENABLE_WHATSAPP_BRIDGE=false
+<<<<<<< HEAD
 ARG HERMES_WEBUI_VERSION=v0.52.458
 ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
+=======
+ARG HERMES_WEBUI_VERSION=v0.52.544
+>>>>>>> 347276f1d14364859c1cb00e64d9b5da327392fa
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
