@@ -30,6 +30,9 @@
 #                              see versions.env for the current pin; add
 #                              -slim for the browser-less image variant)
 #   GATEWAY_PORT / WEBUI_PORT / DASHBOARD_PORT — host port overrides
+#   PORTCULLIS_ENABLED=false — turn off the built-in PII gateway
+#   PORTCULLIS_UPSTREAM_URL / PORTCULLIS_UPSTREAM_KEY — override the provider
+#                              Portcullis forwards to (default: from config.yaml)
 #
 # To reach the services on your own HTTPS domain instead of raw host ports,
 # use Dokploy's "Domains" tab for this app (Container Port 8787 / 9119 /
@@ -53,6 +56,14 @@ services:
       - HERMES_DATA_DIR=/opt/data
       - DASHBOARD_CREDENTIAL=${DASHBOARD_CREDENTIAL:?Set DASHBOARD_CREDENTIAL in the Dokploy Environment tab, e.g. admin:changeme}
       - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:?Set HERMES_WEBUI_PASSWORD in the Dokploy Environment tab — hermes-webui has no login without it}
+      # Portcullis PII gateway (internal, 127.0.0.1:8080 — never published).
+      # On by default; upstream URL/key are derived from config.yaml + .env
+      # unless overridden here. See README: PII redaction (Portcullis).
+      - PORTCULLIS_ENABLED=${PORTCULLIS_ENABLED:-true}
+      - PORTCULLIS_UPSTREAM_URL=${PORTCULLIS_UPSTREAM_URL:-}
+      - PORTCULLIS_UPSTREAM_KEY=${PORTCULLIS_UPSTREAM_KEY:-}
+      - PORTCULLIS_ADMIN_TOKEN=${PORTCULLIS_ADMIN_TOKEN:-}
+      - PORTCULLIS_MODEL_DIR=${PORTCULLIS_MODEL_DIR:-}
       - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     # Overrides the image healthcheck so already-built images work too. Only
     # the WebUI port is checked: Traefik hides unhealthy containers (404), and

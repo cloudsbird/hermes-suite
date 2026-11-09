@@ -3,7 +3,7 @@
 # build.sh — Build the Hermes Suite container image
 #
 # Reads pinned versions from versions.env by default.
-# Override with: ./build.sh --agent v0.22.1 --webui v0.52.458
+# Override with: ./build.sh --agent v0.22.1 --webui v0.52.458 [--portcullis <sha>]
 #
 # CONTAINER_RUNTIME (from versions.env or CLI flag):
 #   auto         — detect podman first, fall back to docker (default)
@@ -28,7 +28,7 @@ BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- Load pinned versions and runtime from versions.env ---
 if [ -f "${BUILD_DIR}/versions.env" ]; then
-    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|ENABLE_WHATSAPP_BRIDGE|ENABLE_BROWSER)=' "${BUILD_DIR}/versions.env")"
+    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|PORTCULLIS_VERSION|CONTAINER_RUNTIME|USE_SUDO|ENABLE_WHATSAPP_BRIDGE|ENABLE_BROWSER)=' "${BUILD_DIR}/versions.env")"
 else
     echo "ERROR: versions.env not found in ${BUILD_DIR}"
     exit 1
@@ -41,6 +41,8 @@ while [[ $# -gt 0 ]]; do
             AGENT_VERSION="$2"; shift 2 ;;
         --webui)
             WEBUI_VERSION="$2"; shift 2 ;;
+        --portcullis)
+            PORTCULLIS_VERSION="$2"; shift 2 ;;
         --podman)
             CONTAINER_RUNTIME="podman"; shift ;;
         --docker)
@@ -61,6 +63,11 @@ while [[ $# -gt 0 ]]; do
             echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+if [ -z "${PORTCULLIS_VERSION:-}" ]; then
+    echo "ERROR: PORTCULLIS_VERSION not set (add it to versions.env or pass --portcullis <sha>)"
+    exit 1
+fi
 
 # --- Auto-detect container runtime ---
 if [ "$CONTAINER_RUNTIME" = "auto" ]; then
@@ -154,6 +161,7 @@ echo " Building Hermes Suite"
 echo "=========================================="
 echo " Agent version:  ${AGENT_VERSION}"
 echo " WebUI version:  ${WEBUI_VERSION}"
+echo " Portcullis:     ${PORTCULLIS_VERSION}"
 echo " Browser:        ${ENABLE_BROWSER}"
 echo " Image tag:      ${IMAGE_TAG}"
 echo " Runtime:        ${CONTAINER_RUNTIME}"
@@ -169,6 +177,7 @@ if [ "$BUILD_CMD" = "podman" ]; then
         --build-arg HERMES_WEBUI_VERSION="${WEBUI_VERSION}" \
         --build-arg ENABLE_WHATSAPP_BRIDGE="${ENABLE_WHATSAPP_BRIDGE}" \
         --build-arg INSTALL_BROWSER="${ENABLE_BROWSER}" \
+        --build-arg PORTCULLIS_VERSION="${PORTCULLIS_VERSION}" \
         -t "${IMAGE_TAG}" \
         --format docker \
         "${BUILD_DIR}"
@@ -178,6 +187,7 @@ else
         --build-arg HERMES_WEBUI_VERSION="${WEBUI_VERSION}" \
         --build-arg ENABLE_WHATSAPP_BRIDGE="${ENABLE_WHATSAPP_BRIDGE}" \
         --build-arg INSTALL_BROWSER="${ENABLE_BROWSER}" \
+        --build-arg PORTCULLIS_VERSION="${PORTCULLIS_VERSION}" \
         -t "${IMAGE_TAG}" \
         "${BUILD_DIR}"
 fi

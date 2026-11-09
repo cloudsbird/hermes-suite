@@ -1,6 +1,6 @@
 # =============================================================================
 # Hermes Suite — All-in-One Container Image
-# Combines: hermes-agent + hermes-webui + hermes-dashboard
+# Combines: hermes-agent + hermes-webui + hermes-dashboard + portcullis
 #
 # Solves Podman v3.4.4 UID/GID sharing limitation between multiple containers
 # by running all three services in a single container under one user.
@@ -9,18 +9,40 @@
 #   hermes-gateway   — Agent gateway on port 8642 (CLI, Telegram, cron, tools)
 #   hermes-dashboard — Built-in monitoring dashboard on port 9119
 #   hermes-webui     — Browser chat interface on port 8787
+#   portcullis       — PII-redacting LLM gateway on 127.0.0.1:8080 (internal)
 #
 # Build:  podman build -t hermes-suite:0.22.1-0.52.458 .
 # Run:    podman-compose up -d
 # =============================================================================
+
+ARG AGENT_VERSION=v0.22.1
+ARG ENABLE_WHATSAPP_BRIDGE=false
+
+# ---------------------------------------------------------------------------
+# Stage 0: Build Portcullis (local PII-redacting LLM gateway)
+# https://github.com/cloudsbird/Portcullis — Rust; built with --features onnx
+# so an ML detector model can optionally be mounted at runtime. ONNX Runtime
+# is statically linked: the binary needs only glibc + libstdc++.
+# PORTCULLIS_VERSION is a commit SHA (the project has no release tags yet).
+# ---------------------------------------------------------------------------
+FROM docker.io/library/rust:1-slim-bookworm AS portcullis-builder
+ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates pkg-config libssl-dev cmake clang \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init -q . && \
+    git remote add origin https://github.com/cloudsbird/Portcullis.git && \
+    git fetch -q --depth 1 origin "${PORTCULLIS_VERSION}" && \
+    git checkout -q FETCH_HEAD && \
+    cargo build --release --locked --features onnx && \
+    ./target/release/portcullis --help >/dev/null
 
 # ---------------------------------------------------------------------------
 # Stage 1: Use the official hermes-agent image as the base
 # This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
 # the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
-ARG AGENT_VERSION=v0.22.1
-ARG ENABLE_WHATSAPP_BRIDGE=false
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
 
 USER root
@@ -125,7 +147,12 @@ RUN chown -R hermes:hermes /opt/hermes-webui/venv
 # ---------------------------------------------------------------------------
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY start.sh /opt/hermes-suite/start.sh
+COPY portcullis-wire.py /opt/hermes-suite/portcullis-wire.py
 RUN chmod +x /opt/hermes-suite/start.sh
+
+# Portcullis binary (see Stage 0). Runs as a supervisord program on
+# 127.0.0.1:8080 only — never exposed; start.sh wires Hermes to it.
+COPY --from=portcullis-builder /src/target/release/portcullis /usr/local/bin/portcullis
 
 # ---------------------------------------------------------------------------
 # Patch: disable dashboard auto-sso — the upstream middleware auto-redirects
@@ -142,13 +169,15 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 ARG AGENT_VERSION=v0.22.1
 ARG ENABLE_WHATSAPP_BRIDGE=false
 ARG HERMES_WEBUI_VERSION=v0.52.458
+ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
       org.opencontainers.image.source="https://github.com/cloudsbird/hermes-suite" \
       org.opencontainers.image.vendor="sunnysktsang" \
       hermes-suite.agent-version="${AGENT_VERSION}" \
-      hermes-suite.webui-version="${HERMES_WEBUI_VERSION}"
+      hermes-suite.webui-version="${HERMES_WEBUI_VERSION}" \
+      hermes-suite.portcullis-version="${PORTCULLIS_VERSION}"
 
 ENV PATH="/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:$PATH"
 ENV HERMES_HOME=/opt/data

@@ -42,6 +42,11 @@ jobs:
           echo "agent_version=v${AGENT_VER}" >> "$GITHUB_OUTPUT"
           echo "webui_version=v${WEBUI_VER}" >> "$GITHUB_OUTPUT"
 
+          # Portcullis is pinned by commit in versions.env (not part of the tag).
+          PORTCULLIS_VER="$(grep -E '^PORTCULLIS_VERSION=' versions.env | cut -d= -f2)"
+          [ -n "${PORTCULLIS_VER}" ] || { echo "PORTCULLIS_VERSION missing from versions.env"; exit 1; }
+          echo "portcullis_version=${PORTCULLIS_VER}" >> "$GITHUB_OUTPUT"
+
           echo "Suite tag:     ${DOCKER_TAG}"
           echo "Agent version: v${AGENT_VER}"
           echo "WebUI version: v${WEBUI_VER}"
@@ -68,6 +73,7 @@ jobs:
           build-args: |
             AGENT_VERSION=${{ steps.versions.outputs.agent_version }}
             HERMES_WEBUI_VERSION=${{ steps.versions.outputs.webui_version }}
+            PORTCULLIS_VERSION=${{ steps.versions.outputs.portcullis_version }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.docker_tag }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
@@ -85,6 +91,7 @@ jobs:
           build-args: |
             AGENT_VERSION=${{ steps.versions.outputs.agent_version }}
             HERMES_WEBUI_VERSION=${{ steps.versions.outputs.webui_version }}
+            PORTCULLIS_VERSION=${{ steps.versions.outputs.portcullis_version }}
             INSTALL_BROWSER=false
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.docker_tag }}-slim

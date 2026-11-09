@@ -9,7 +9,7 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yaml"
 
 # --- Load config from versions.env ---
 if [ -f "${SCRIPT_DIR}/versions.env" ]; then
-    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL|HERMES_WEBUI_PASSWORD|ENABLE_BROWSER)=' "${SCRIPT_DIR}/versions.env")"
+    eval "$(grep -E '^(AGENT_VERSION|WEBUI_VERSION|CONTAINER_RUNTIME|USE_SUDO|DASHBOARD_CREDENTIAL|HERMES_WEBUI_PASSWORD|ENABLE_BROWSER|PORTCULLIS_ENABLED)=' "${SCRIPT_DIR}/versions.env")"
 fi
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-auto}"
 USE_SUDO="${USE_SUDO:-false}"
@@ -39,6 +39,10 @@ export DASHBOARD_CREDENTIAL
 # Separate mechanism from DASHBOARD_CREDENTIAL — hermes-webui enforces this
 # itself. No default and no "auto" option; unset means no WebUI login.
 export HERMES_WEBUI_PASSWORD="${HERMES_WEBUI_PASSWORD:-}"
+
+# --- Portcullis PII gateway ---
+# On by default; PORTCULLIS_ENABLED=false in versions.env turns it off.
+export PORTCULLIS_ENABLED="${PORTCULLIS_ENABLED:-true}"
 
 # --- Persistent data paths ---
 # Preserve the previous host-path behavior for local Podman/Docker use.

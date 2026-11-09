@@ -50,6 +50,58 @@ setup_webui_auth() {
     fi
 }
 
+# --- Helper: Portcullis PII gateway setup ---
+# Portcullis runs as a supervisord program on 127.0.0.1:8080. On by default;
+# PORTCULLIS_ENABLED=false turns it off (and restores config.yaml).
+# portcullis-wire.py resolves the real upstream from config.yaml / .env,
+# rewires Hermes to the proxy, and writes the env file sourced below.
+# Any failure here leaves Portcullis off rather than blocking startup.
+setup_portcullis() {
+    local state_dir="$HERMES_HOME/portcullis"
+    PORTCULLIS_AUTOSTART=false
+    PORTCULLIS_STATUS="NOT ACTIVE — setup failed (see log above)"
+    export PORTCULLIS_AUTOSTART PORTCULLIS_STATUS
+    # Never let this abort container startup (we run under set -e), e.g. a
+    # root-owned state dir left by a Docker run, later started under Podman.
+    if ! { mkdir -p "$state_dir" && chmod 700 "$state_dir" && [ -w "$state_dir" ]; } 2>/dev/null; then
+        echo "Warning: $state_dir is not writable — Portcullis disabled"
+        PORTCULLIS_STATUS="NOT ACTIVE — $state_dir not writable"
+        return 0
+    fi
+
+    # docker-compose always sets these keys (empty when unset) — an empty
+    # value must not override what the wire script resolves.
+    for v in PORTCULLIS_UPSTREAM_URL PORTCULLIS_UPSTREAM_KEY PORTCULLIS_ADMIN_TOKEN \
+             PORTCULLIS_MODEL_DIR PORTCULLIS_STORE_KEY_FILE PORTCULLIS_THRESHOLD; do
+        if [ -z "${!v:-}" ]; then unset "$v"; fi
+    done
+
+    export PORTCULLIS_STORE="$state_dir/store.json"
+
+    # Admin token guards /teach, /unteach, /terms, /suggestions.
+    if [ -z "${PORTCULLIS_ADMIN_TOKEN:-}" ]; then
+        if [ ! -s "$state_dir/admin_token" ]; then
+            ( umask 077 && python3 -c "import secrets; print(secrets.token_hex(24))" \
+                > "$state_dir/admin_token" ) || true
+        fi
+        PORTCULLIS_ADMIN_TOKEN="$(cat "$state_dir/admin_token" 2>/dev/null || true)"
+    fi
+    if [ -n "${PORTCULLIS_ADMIN_TOKEN:-}" ]; then
+        export PORTCULLIS_ADMIN_TOKEN
+    else
+        unset PORTCULLIS_ADMIN_TOKEN   # Portcullis then answers 503 on /teach
+    fi
+
+    rm -f "$state_dir/env" 2>/dev/null || true
+    if HERMES_HOME="$HERMES_HOME" python3 -I /opt/hermes-suite/portcullis-wire.py \
+        && [ -f "$state_dir/env" ]; then
+        # shellcheck disable=SC1091
+        . "$state_dir/env" || true
+    fi
+    export PORTCULLIS_AUTOSTART PORTCULLIS_STATUS
+    return 0
+}
+
 # --- Helper: directory and config setup (shared by both paths) ---
 setup_hermes() {
     source "${INSTALL_DIR}/.venv/bin/activate"
@@ -91,6 +143,9 @@ setup_hermes() {
     # --- WebUI password (separate mechanism, see setup_webui_auth) ---
     setup_webui_auth
 
+    # --- Portcullis PII gateway (needs config.yaml + .env in place) ---
+    setup_portcullis
+
     # --- Clean up stale PID/lock files from previous container runs ---
     for f in gateway.pid gateway.lock; do
         if [ -f "$HERMES_HOME/$f" ]; then
@@ -111,6 +166,7 @@ print_banner() {
     echo " Gateway:    http://0.0.0.0:8642"
     echo " Dashboard:  http://0.0.0.0:9119"
     echo " WebUI:      http://0.0.0.0:8787"
+    echo " Portcullis: 127.0.0.1:8080 (internal) — ${PORTCULLIS_STATUS:-unknown}"
     echo "=========================================="
     echo " Dashboard login: $HERMES_DASHBOARD_BASIC_AUTH_USERNAME / $HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"
     if [ -n "${HERMES_WEBUI_PASSWORD:-}" ]; then

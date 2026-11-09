@@ -1,12 +1,14 @@
 # Hermes Suite — All-in-One Container Image
 
-Single Docker/Podman image combining three Hermes services:
+Single Docker/Podman image combining three Hermes services, plus a built-in
+PII-redacting gateway in front of the LLM provider:
 
 | Service | Port | Description |
 |---------|------|-------------|
 | hermes-gateway | 8642 | Agent gateway (CLI, Telegram, cron, tools) |
 | hermes-dashboard | 9119 | Monitoring/analytics dashboard (built-in) |
 | hermes-webui | 8787 | Browser-based chat interface |
+| portcullis | 127.0.0.1:8080 (internal) | [PII gateway](#pii-redaction-portcullis) — redacts prompts before they leave the container |
 
 Pre-built multi-arch images available on [GHCR](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite).
 
@@ -39,6 +41,9 @@ This image solves that by running all three services in **one container** via su
 |  |                                           |  |
 |  |  [hermes-webui]     port 8787             |  |
 |  |    python server.py                       |  |
+|  |                                           |  |
+|  |  [portcullis]  127.0.0.1:8080 (internal)  |  |
+|  |    redacts every model call  ------------------> LLM provider
 |  |                                           |  |
 |  +-------------------------------------------+  |
 |                                                 |
@@ -233,7 +238,87 @@ examples if they don't already exist.
   skills/         — Custom skills
   memories/       — Persistent memory
   webui/          — WebUI state (sessions, workspace)
+  portcullis/     — PII gateway state (taught terms, admin token, saved model settings)
 ```
+
+## PII redaction (Portcullis)
+
+The image includes [Portcullis](https://github.com/cloudsbird/Portcullis), a
+local PII gateway. It is **on by default**: every model call Hermes makes
+(gateway, dashboard and WebUI) goes through it. Before the prompt leaves the
+container, private values such as emails, phone numbers and keys are replaced
+with placeholders like `<<EMAIL_1>>`. The real values are put back into the
+reply, so the provider sees the task but never the identities.
+
+**How it is wired.** On every start, `start.sh` runs `portcullis-wire.py`, which:
+
+1. reads `model.provider` / `model.base_url` / `model.api_key` from
+   `~/.hermes/config.yaml` and the matching key from `~/.hermes/.env`
+   (e.g. `OPENROUTER_API_KEY`);
+2. hands that real upstream to Portcullis;
+3. rewrites `config.yaml` so Hermes talks to `http://127.0.0.1:8080/v1`
+   (`provider: custom`). Comments are kept, and the original values are saved
+   to `~/.hermes/portcullis/original-model.json`.
+
+The startup banner shows the result, e.g.
+`Portcullis: ... — active — redacting before openrouter.ai`.
+
+If you later change the provider in `config.yaml` (or through `hermes model`),
+just restart. The new values become the upstream and get wired again.
+
+**Turning it off.** Set `PORTCULLIS_ENABLED=false` in `versions.env` (for `./up.sh`)
+or in the compose environment, then restart. Your original `config.yaml` model
+settings are restored automatically.
+
+**Overriding the upstream.** `PORTCULLIS_UPSTREAM_URL` / `PORTCULLIS_UPSTREAM_KEY`
+in the compose environment take precedence over what is derived from `config.yaml`.
+
+**Teaching it your private terms** (client names, projects, colleagues). Any
+term you teach is redacted on every later request:
+
+```bash
+podman exec hermes-suite sh -c 'curl -s -X POST 127.0.0.1:8080/teach \
+  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)" \
+  -H "content-type: application/json" -d "{\"term\":\"Project Loki\",\"label\":\"ORG\"}"'
+
+# list taught terms / terms it spotted but you have not taught yet
+podman exec hermes-suite sh -c 'curl -s 127.0.0.1:8080/terms \
+  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)"'
+podman exec hermes-suite sh -c 'curl -s 127.0.0.1:8080/suggestions \
+  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)"'
+```
+
+The admin token is generated into `~/.hermes/portcullis/admin_token` on
+first start; set `PORTCULLIS_ADMIN_TOKEN` to choose your own. Taught terms
+live in `~/.hermes/portcullis/store.json`. That file is a map of everything
+you consider private, so treat it as a secret.
+
+**Optional ML detector.** By default only Portcullis' deterministic layers run:
+taught terms plus regex for emails, phones, keys and so on, using about 13 MB of
+RAM. The binary is built with ONNX support. To add the GLiNER2 detector (about
+1.2 GB on disk and about 1.6 GB of RAM), export the model as described in the
+[Portcullis docs](https://github.com/cloudsbird/Portcullis#the-detector-model),
+put it under `~/.hermes/portcullis/model/`, and set
+`PORTCULLIS_MODEL_DIR=/opt/data/portcullis/model` in the compose environment.
+
+**Limitations**
+
+- Only OpenAI-compatible (chat-completions) providers are proxied. With
+  `anthropic`, `nous`, `openai-codex`, `copilot`, `bedrock` or `gemini`, the
+  banner says `NOT ACTIVE` and Hermes talks to the provider directly.
+- Side tasks (compression, vision, titles, …) left on `provider: auto` use
+  the main route, so they **are** redacted. Hermes only routes elsewhere when
+  you configure it to: `auxiliary.<task>.provider/base_url`, `fallback_providers`
+  / `fallback_model`, or `delegation.provider`. Those routes are **not**
+  redacted. The startup log names each one (`WARNING: ... is NOT redacted`),
+  and the banner shows how many there are.
+- Portcullis does not serve `/v1/models`, so Hermes looks up the context
+  window by model name (models.dev / OpenRouter catalog). If it gets it
+  wrong, set `model.context_length` in `config.yaml`.
+- Port 8080 is never published: the proxy endpoints have no authentication
+  and forward requests using your provider key. Do not add a port mapping for it.
+- If Portcullis crashes, model calls fail rather than bypass it. That is fail
+  closed, by design. supervisord restarts it.
 
 ## Stopping
 
@@ -532,8 +617,14 @@ The Dockerfile performs these steps:
    `/opt/hermes-webui/venv`, along with the agent's Python dependencies so the WebUI
    can import agent modules.
 
-6. **Entrypoint** — `start.sh` handles UID/GID remapping (for rootless Podman),
-   directory setup, and config bootstrapping before launching supervisord.
+6. **Portcullis** — A Rust builder stage compiles the pinned
+   [Portcullis](https://github.com/cloudsbird/Portcullis) commit
+   (`PORTCULLIS_VERSION`) with `--features onnx`. Only the binary is copied into
+   the image.
+
+7. **Entrypoint** — `start.sh` handles UID/GID remapping (for rootless Podman),
+   directory setup, config bootstrapping and Portcullis wiring before launching
+   supervisord.
 
 ## Files
 
@@ -541,8 +632,9 @@ The Dockerfile performs these steps:
 hermes-suite/
   Dockerfile           — Build definition (parameterized AGENT_VERSION + HERMES_WEBUI_VERSION)
   versions.env         — Pinned component versions for current release
-  supervisord.conf     — Process manager config (3 services)
+  supervisord.conf     — Process manager config (4 services)
   start.sh             — Container entrypoint (UID setup + launch)
+  portcullis-wire.py   — Points Hermes' config.yaml at the Portcullis gateway
   docker-compose.yaml  — Podman/Docker Compose configuration (local use)
   docker-compose.dokploy.yaml — Compose variant for Dokploy/remote VPS deploys
   build.sh             — Build helper script (reads versions.env)
