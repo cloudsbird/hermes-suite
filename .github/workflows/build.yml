@@ -108,9 +108,16 @@ jobs:
             PORTCULLIS_VERSION=${{ needs.prepare.outputs.portcullis_version }}
             INSTALL_BROWSER=${{ matrix.install_browser }}
           outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          # Separate cache per arch/variant so runners don't evict each other.
-          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.arch }}
+          # Layer cache lives in GHCR (buildcache-<variant>-<arch> tags), not the
+          # GitHub Actions cache: four ~4 GB variants overflow the Actions
+          # cache's 10 GB repo limit, so its big layers kept being evicted.
+          # Each job also reads the other variant of the same arch — full and
+          # slim share the base packages and the Portcullis Rust build.
+          # ignore-error: a cache write problem must never fail a release.
+          cache-from: |
+            type=registry,ref=${{ needs.prepare.outputs.image }}:buildcache-${{ matrix.variant }}-${{ matrix.arch }}
+            type=registry,ref=${{ needs.prepare.outputs.image }}:buildcache-${{ matrix.variant == 'full' && 'slim' || 'full' }}-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ needs.prepare.outputs.image }}:buildcache-${{ matrix.variant }}-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Export digest
         run: |
