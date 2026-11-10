@@ -46,11 +46,9 @@ services:
       # other than 127.0.0.1 — unset means no login on the WebUI at all.
       - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:-}
       # Portcullis PII gateway (internal, 127.0.0.1:8080 — never published).
-      # On by default; upstream URL/key are derived from config.yaml + .env
-      # unless overridden here. See README: PII redaction (Portcullis).
+      # On by default and transparent: Hermes keeps its own provider config;
+      # every LLM call is redacted on the way out. See README: PII redaction.
       - PORTCULLIS_ENABLED=${PORTCULLIS_ENABLED:-true}
-      - PORTCULLIS_UPSTREAM_URL=${PORTCULLIS_UPSTREAM_URL:-}
-      - PORTCULLIS_UPSTREAM_KEY=${PORTCULLIS_UPSTREAM_KEY:-}
       - PORTCULLIS_ADMIN_TOKEN=${PORTCULLIS_ADMIN_TOKEN:-}
       - PORTCULLIS_MODEL_DIR=${PORTCULLIS_MODEL_DIR:-}
       - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

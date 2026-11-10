@@ -50,55 +50,79 @@ setup_webui_auth() {
     fi
 }
 
-# --- Helper: Portcullis PII gateway setup ---
+# --- Helper: Portcullis PII gateway setup (transparent mode) ---
 # Portcullis runs as a supervisord program on 127.0.0.1:8080. On by default;
-# PORTCULLIS_ENABLED=false turns it off (and restores config.yaml).
-# portcullis-wire.py resolves the real upstream from config.yaml / .env,
-# rewires Hermes to the proxy, and writes the env file sourced below.
-# Any failure here leaves Portcullis off rather than blocking startup.
+# PORTCULLIS_ENABLED=false turns it off. Hermes' config is never modified: an
+# httpx hook in the Hermes venvs (portcullis_hook.py) routes every LLM call
+# through Portcullis while $HERMES_HOME/portcullis/transparent exists, and
+# Portcullis forwards it to the real provider with Hermes' own key/headers.
+# Settings go to $HERMES_HOME/portcullis/env, read by portcullis-run.sh, so the
+# program survives supervisord restarts. Never blocks container startup.
 setup_portcullis() {
     local state_dir="$HERMES_HOME/portcullis"
-    PORTCULLIS_AUTOSTART=false
+    local enabled="${PORTCULLIS_ENABLED:-true}"
+    case "${enabled,,}" in false|0|no|off) enabled=false ;; *) enabled=true ;; esac
     PORTCULLIS_STATUS="NOT ACTIVE — setup failed (see log above)"
-    export PORTCULLIS_AUTOSTART PORTCULLIS_STATUS
-    # Never let this abort container startup (we run under set -e), e.g. a
-    # root-owned state dir left by a Docker run, later started under Podman.
+    export PORTCULLIS_STATUS
+
     if ! { mkdir -p "$state_dir" && chmod 700 "$state_dir" && [ -w "$state_dir" ]; } 2>/dev/null; then
-        echo "Warning: $state_dir is not writable — Portcullis disabled"
+        echo "Warning: $state_dir is not writable — Portcullis disabled, LLM calls NOT redacted"
         PORTCULLIS_STATUS="NOT ACTIVE — $state_dir not writable"
         return 0
     fi
 
-    # docker-compose always sets these keys (empty when unset) — an empty
-    # value must not override what the wire script resolves.
-    for v in PORTCULLIS_UPSTREAM_URL PORTCULLIS_UPSTREAM_KEY PORTCULLIS_ADMIN_TOKEN \
-             PORTCULLIS_MODEL_DIR PORTCULLIS_STORE_KEY_FILE PORTCULLIS_THRESHOLD; do
-        if [ -z "${!v:-}" ]; then unset "$v"; fi
-    done
+    # Migration: older releases rewrote model.* in config.yaml. Put it back.
+    local mig=0
+    HERMES_HOME="$HERMES_HOME" python3 -I /opt/hermes-suite/portcullis-wire.py || mig=$?
+    if [ "$mig" -ne 0 ]; then
+        echo "Warning: config.yaml still points at Portcullis or could not be restored (see above)"
+    fi
 
-    export PORTCULLIS_STORE="$state_dir/store.json"
+    if [ "$enabled" = "false" ]; then
+        rm -f "$state_dir/transparent"
+        printf 'PORTCULLIS_ENABLED=false\n' > "$state_dir/env"
+        PORTCULLIS_STATUS="disabled (PORTCULLIS_ENABLED=false)"
+        return 0
+    fi
 
     # Admin token guards /teach, /unteach, /terms, /suggestions.
-    if [ -z "${PORTCULLIS_ADMIN_TOKEN:-}" ]; then
+    local token="${PORTCULLIS_ADMIN_TOKEN:-}"
+    if [ -z "$token" ]; then
         if [ ! -s "$state_dir/admin_token" ]; then
             ( umask 077 && python3 -c "import secrets; print(secrets.token_hex(24))" \
                 > "$state_dir/admin_token" ) || true
         fi
-        PORTCULLIS_ADMIN_TOKEN="$(cat "$state_dir/admin_token" 2>/dev/null || true)"
-    fi
-    if [ -n "${PORTCULLIS_ADMIN_TOKEN:-}" ]; then
-        export PORTCULLIS_ADMIN_TOKEN
-    else
-        unset PORTCULLIS_ADMIN_TOKEN   # Portcullis then answers 503 on /teach
+        token="$(cat "$state_dir/admin_token" 2>/dev/null || true)"
     fi
 
-    rm -f "$state_dir/env" 2>/dev/null || true
-    if HERMES_HOME="$HERMES_HOME" python3 -I /opt/hermes-suite/portcullis-wire.py \
-        && [ -f "$state_dir/env" ]; then
-        # shellcheck disable=SC1091
-        . "$state_dir/env" || true
+    {
+        echo "PORTCULLIS_ENABLED=true"
+        if [ -n "$token" ]; then printf 'PORTCULLIS_ADMIN_TOKEN=%q\n' "$token"; fi
+        for v in PORTCULLIS_MODEL_DIR PORTCULLIS_THRESHOLD PORTCULLIS_STORE_KEY_FILE PORTCULLIS_LOG_FORMAT; do
+            if [ -n "${!v:-}" ]; then printf '%s=%q\n' "$v" "${!v}"; fi
+        done
+        true
+    } > "$state_dir/env.tmp" && chmod 600 "$state_dir/env.tmp" && mv "$state_dir/env.tmp" "$state_dir/env"
+
+    # Turns the httpx hook on (it checks for this file on every request).
+    : > "$state_dir/transparent"
+
+    # Report what is really loaded, not what should be: the hook must have been
+    # imported by its .pth in both venvs that make LLM calls.
+    local py missing=""
+    for py in /opt/hermes/.venv/bin/python3 /opt/hermes-webui/venv/bin/python3; do
+        if [ -x "$py" ] && ! "$py" /opt/hermes-suite/portcullis-hook-check.py >/dev/null 2>&1; then
+            missing="$missing $py"
+        fi
+    done
+    if [ "$mig" -eq 3 ]; then
+        PORTCULLIS_STATUS="ACTION NEEDED — config.yaml model.base_url points at Portcullis; restore your provider (see warning above)"
+    elif [ -n "$missing" ]; then
+        echo "WARNING: Portcullis hook NOT loaded in:$missing — those LLM calls are NOT redacted"
+        PORTCULLIS_STATUS="NOT ACTIVE — hook not loaded (see warning above)"
+    else
+        PORTCULLIS_STATUS="active — every LLM call is redacted (transparent; config.yaml untouched)"
     fi
-    export PORTCULLIS_AUTOSTART PORTCULLIS_STATUS
     return 0
 }
 

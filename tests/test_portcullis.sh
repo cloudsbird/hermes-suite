@@ -5,9 +5,14 @@
 # Pure shell + Python: no container runtime, no network (podman is stubbed).
 #   bash tests/test_portcullis.sh
 #
-# Wire-script cases need a Python with ruamel.yaml (it ships in the image's
-# hermes-agent venv). Point PYTHON at one; they are skipped if unavailable:
+# Migration cases need a Python with ruamel.yaml, hook cases one with httpx
+# (both ship in the image's hermes-agent venv). Point PYTHON at one; cases are
+# skipped if the module is missing:
 #   PYTHON=/path/to/venv/bin/python bash tests/test_portcullis.sh
+#
+# Optional end-to-end run of the transparent route through a real Portcullis
+# binary (built with passthrough support) using the openai/anthropic SDKs:
+#   PORTCULLIS_BIN=/path/to/portcullis PYTHON=... bash tests/test_portcullis.sh
 # =============================================================================
 set -u
 
@@ -65,117 +70,187 @@ for f in docker-compose.yaml docker-compose.dokploy.yaml; do
         && bad "$f: no 8080 port mapping" || ok "$f: no 8080 port mapping"
     has "$f: PORTCULLIS_ENABLED passthrough" 'PORTCULLIS_ENABLED=${PORTCULLIS_ENABLED:-true}' "${REPO_DIR}/$f"
 done
-has "supervisord binds loopback only" "serve --bind 127.0.0.1:8080" "${REPO_DIR}/supervisord.conf"
+has "launcher binds loopback only" "serve --bind 127.0.0.1:8080" "${REPO_DIR}/portcullis-run.sh"
+has "launcher enables passthrough" "PORTCULLIS_PASSTHROUGH=1" "${REPO_DIR}/portcullis-run.sh"
+has "supervisord runs the launcher" "command=/opt/hermes-suite/portcullis-run.sh" "${REPO_DIR}/supervisord.conf"
+hasnt "no env-dependent autostart" "ENV_PORTCULLIS" "${REPO_DIR}/supervisord.conf"
+has "hook installed into venvs" "portcullis_hook.pth" "${REPO_DIR}/Dockerfile"
 
-echo "== start.sh syntax =="
-bash -n "${REPO_DIR}/start.sh" && ok "bash -n start.sh" || bad "bash -n start.sh"
+echo "== shell syntax =="
+for f in start.sh portcullis-run.sh; do
+    bash -n "${REPO_DIR}/$f" && ok "bash -n $f" || bad "bash -n $f"
+done
 
-if ! "$PYTHON" -c "import ruamel.yaml" 2>/dev/null; then
-    echo "== wire script: SKIPPED (no ruamel.yaml in $PYTHON) =="
-    SKIP=1
+echo "== portcullis-run.sh: disabled exits 0 without starting =="
+H="${WORK}/run"; mkdir -p "$H/portcullis"
+echo "PORTCULLIS_ENABLED=false" > "$H/portcullis/env"
+HERMES_HOME="$H" bash "${REPO_DIR}/portcullis-run.sh" > "$H/out" 2>&1
+eq "exit code 0 when disabled" "0" "$?"
+has "says disabled" "disabled" "$H/out"
+
+pyhas() { "$PYTHON" -c "import $1" 2>/dev/null; }
+
+# --------------------------------------------------------------------------
+if ! pyhas ruamel.yaml; then
+    echo "== migration: SKIPPED (no ruamel.yaml in $PYTHON) =="; SKIP=1
 else
-    wire() { env -u PORTCULLIS_UPSTREAM_URL -u PORTCULLIS_UPSTREAM_KEY -u OPENROUTER_API_KEY \
-        HERMES_HOME="$1" "${@:2}" "$PYTHON" -I "$WIRE" >"$1/wire.out" 2>&1; }
-    envval() { ( . "$1/portcullis/env"; eval "echo \"\${$2:-}\"" ); }
+    mig() { HERMES_HOME="$1" "$PYTHON" -I "$WIRE" >"$1/mig.out" 2>&1; }
 
-    echo "== wire: openrouter config is rewired, comments kept =="
-    H="${WORK}/h1"; mkdir -p "$H"
+    echo "== migration: old rewrite is restored, comments kept =="
+    H="${WORK}/m1"; mkdir -p "$H/portcullis"
+    cat > "$H/config.orig" <<'EOF'
+# keep me
+model:
+  default: "glm-5.3-flash"
+  provider: "opencode-go"
+  base_url: "https://opencode.ai/zen/go/v1"
+EOF
     cat > "$H/config.yaml" <<'EOF'
 # keep me
 model:
-  default: "anthropic/claude-opus-4.6"
-  provider: "auto"
-  base_url: "https://openrouter.ai/api/v1"
+  default: "glm-5.3-flash"
+  provider: "custom"
+  base_url: "http://127.0.0.1:8080/v1"
+  api_key: portcullis-local
+  api_mode: chat_completions
 EOF
-    echo 'OPENROUTER_API_KEY="sk-or-test"' > "$H/.env"
-    cp "$H/config.yaml" "$H/config.orig"
-    wire "$H"
+    echo '{"provider":"opencode-go","base_url":"https://opencode.ai/zen/go/v1","api_key":null,"api_mode":null}' \
+        > "$H/portcullis/original-model.json"
+    mig "$H"
     eq "exit code" "0" "$?"
-    has "comment preserved" "# keep me" "$H/config.yaml"
-    has "base_url -> proxy" 'base_url: "http://127.0.0.1:8080/v1"' "$H/config.yaml"
-    has "provider -> custom" 'provider: "custom"' "$H/config.yaml"
-    has "api_mode pinned" "api_mode: chat_completions" "$H/config.yaml"
-    eq "autostart" "true" "$(envval "$H" PORTCULLIS_AUTOSTART)"
-    eq "upstream url" "https://openrouter.ai/api/v1" "$(envval "$H" PORTCULLIS_UPSTREAM_URL)"
-    eq "upstream key from .env" "sk-or-test" "$(envval "$H" PORTCULLIS_UPSTREAM_KEY)"
-    eq "env file mode" "600" "$(stat -c %a "$H/portcullis/env")"
-
-    echo "== wire: idempotent re-run =="
-    cp "$H/config.yaml" "$H/config.wired"
-    wire "$H"
-    cmp -s "$H/config.yaml" "$H/config.wired" && ok "config unchanged on re-run" || bad "config unchanged on re-run"
-    eq "upstream still resolved from backup" "https://openrouter.ai/api/v1" "$(envval "$H" PORTCULLIS_UPSTREAM_URL)"
-
-    echo "== wire: env override wins =="
-    wire "$H" PORTCULLIS_UPSTREAM_URL=https://api.deepseek.com/v1 PORTCULLIS_UPSTREAM_KEY=sk-ds
-    eq "override url" "https://api.deepseek.com/v1" "$(envval "$H" PORTCULLIS_UPSTREAM_URL)"
-    eq "override key" "sk-ds" "$(envval "$H" PORTCULLIS_UPSTREAM_KEY)"
-
-    echo "== wire: disabled restores original =="
-    wire "$H" PORTCULLIS_ENABLED=false
     cmp -s "$H/config.yaml" "$H/config.orig" && ok "config restored byte-identical" || bad "config restored byte-identical"
-    eq "autostart off" "false" "$(envval "$H" PORTCULLIS_AUTOSTART)"
     [ ! -e "$H/portcullis/original-model.json" ] && ok "backup removed" || bad "backup removed"
+    cp "$H/config.yaml" "$H/config.after"; mig "$H"
+    cmp -s "$H/config.yaml" "$H/config.after" && ok "idempotent" || bad "idempotent"
 
-    echo "== wire: unsupported provider left alone =="
-    H="${WORK}/h2"; mkdir -p "$H"
-    printf 'model:\n  default: claude\n  provider: anthropic\n' > "$H/config.yaml"
+    echo "== migration: user already changed provider -> config left alone =="
+    H="${WORK}/m2"; mkdir -p "$H/portcullis"
+    printf 'model:\n  provider: openrouter\n  base_url: https://openrouter.ai/api/v1\n' > "$H/config.yaml"
     cp "$H/config.yaml" "$H/config.orig"
-    wire "$H"
-    cmp -s "$H/config.yaml" "$H/config.orig" && ok "anthropic config untouched" || bad "anthropic config untouched"
-    eq "autostart off" "false" "$(envval "$H" PORTCULLIS_AUTOSTART)"
-
-    echo "== wire: no key -> not active, untouched =="
-    H="${WORK}/h3"; mkdir -p "$H"
-    printf 'model:\n  default: x\n  provider: auto\n' > "$H/config.yaml"
-    cp "$H/config.yaml" "$H/config.orig"
-    wire "$H"
+    echo '{"provider":"auto","base_url":null,"api_key":null,"api_mode":null}' > "$H/portcullis/original-model.json"
+    mig "$H"
     cmp -s "$H/config.yaml" "$H/config.orig" && ok "config untouched" || bad "config untouched"
-    eq "autostart off" "false" "$(envval "$H" PORTCULLIS_AUTOSTART)"
+    [ ! -e "$H/portcullis/original-model.json" ] && ok "stale backup removed" || bad "stale backup removed"
 
-    echo "== wire: no config.yaml yet =="
-    H="${WORK}/h4"; mkdir -p "$H"
-    wire "$H"
-    eq "exit code" "0" "$?"
-    eq "autostart off" "false" "$(envval "$H" PORTCULLIS_AUTOSTART)"
+    echo "== migration: hand-pointed at gateway without backup -> loud warning =="
+    H="${WORK}/m4"; mkdir -p "$H/portcullis"
+    printf 'model:\n  provider: custom\n  base_url: http://127.0.0.1:8080/v1\n' > "$H/config.yaml"
+    cp "$H/config.yaml" "$H/config.orig"
+    mig "$H"
+    eq "exit code 3 (action needed)" "3" "$?"
+    has "warns about HTTP 400" "fail with HTTP 400" "$H/mig.out"
+    cmp -s "$H/config.yaml" "$H/config.orig" && ok "config untouched" || bad "config untouched"
 
-    echo "== wire: provider changed while wired -> rewired to new upstream =="
-    H="${WORK}/h5"; mkdir -p "$H"
-    printf 'model:\n  default: m\n  provider: custom\n  base_url: http://ollama:11434/v1\n' > "$H/config.yaml"
-    wire "$H"
-    eq "local upstream needs no key" "true" "$(envval "$H" PORTCULLIS_AUTOSTART)"
-    sed -i 's|http://127.0.0.1:8080/v1|https://api.groq.com/openai/v1|' "$H/config.yaml"
-    sed -i 's|portcullis-local|gsk-test|' "$H/config.yaml"
-    wire "$H"
-    eq "new upstream picked up" "https://api.groq.com/openai/v1" "$(envval "$H" PORTCULLIS_UPSTREAM_URL)"
-    eq "new key picked up" "gsk-test" "$(envval "$H" PORTCULLIS_UPSTREAM_KEY)"
-    has "rewired" "http://127.0.0.1:8080/v1" "$H/config.yaml"
+    echo "== migration: fresh install is a no-op =="
+    H="${WORK}/m3"; mkdir -p "$H"
+    mig "$H"; eq "exit code" "0" "$?"
+fi
 
-    echo "== wire: bypass routes are reported =="
-    H="${WORK}/h6"; mkdir -p "$H"
-    cat > "$H/config.yaml" <<'EOF'
-model:
-  default: m
-  provider: openrouter
-auxiliary:
-  compression:
-    provider: auto
-  vision:
-    provider: gemini
-fallback_providers:
-  - provider: nous
-    model: x
+# --------------------------------------------------------------------------
+if ! pyhas httpx; then
+    echo "== hook: SKIPPED (no httpx in $PYTHON) =="; SKIP=1
+else
+    echo "== hook: routing decisions =="
+    H="${WORK}/hook"; mkdir -p "$H/portcullis"
+    hook() { HERMES_HOME="$H" PYTHONPATH="$REPO_DIR" "$PYTHON" - "$@" <<'EOF'
+import sys, portcullis_hook, httpx
+method, url = sys.argv[1], sys.argv[2]
+r = httpx.Request(method, url, json={})
+portcullis_hook._rewrite(httpx, r)
+print(r.url, r.headers.get("x-portcullis-upstream", "-"), r.headers.get("host"))
 EOF
-    wire "$H" PORTCULLIS_UPSTREAM_KEY=k
-    eq "still active" "true" "$(envval "$H" PORTCULLIS_AUTOSTART)"
-    has "aux vision warned" "auxiliary.vision has its own provider" "$H/wire.out"
-    has "fallback warned" "fallback_providers has its own provider" "$H/wire.out"
-    hasnt "aux auto not warned" "auxiliary.compression" "$H/wire.out"
-    has "status mentions bypass" "2 route(s) bypass it" "$H/portcullis/env"
+    }
+    out="$(hook POST https://opencode.ai/zen/go/v1/chat/completions)"
+    eq "inactive without marker" "https://opencode.ai/zen/go/v1/chat/completions - opencode.ai" "$out"
+    touch "$H/portcullis/transparent"
+    out="$(hook POST https://opencode.ai/zen/go/v1/chat/completions)"
+    eq "chat completions routed" "http://127.0.0.1:8080/v1/chat/completions https://opencode.ai/zen/go/v1/chat/completions 127.0.0.1:8080" "$out"
+    out="$(hook POST https://api.anthropic.com/v1/messages)"
+    eq "anthropic messages routed" "http://127.0.0.1:8080/v1/messages https://api.anthropic.com/v1/messages 127.0.0.1:8080" "$out"
+    out="$(hook GET https://opencode.ai/zen/go/v1/models)"
+    eq "GET /models untouched" "https://opencode.ai/zen/go/v1/models - opencode.ai" "$out"
+    out="$(hook POST https://api.anthropic.com/v1/messages/count_tokens)"
+    eq "count_tokens untouched" "https://api.anthropic.com/v1/messages/count_tokens - api.anthropic.com" "$out"
+    out="$(hook POST http://127.0.0.1:8080/v1/chat/completions)"
+    eq "gateway itself untouched" "http://127.0.0.1:8080/v1/chat/completions - 127.0.0.1:8080" "$out"
+    hook POST https://chatgpt.com/backend-api/codex/responses > /dev/null 2> "$H/warn"
+    has "unsupported protocol warns" "NOT redacted" "$H/warn"
+    out="$(PORTCULLIS_TRANSPARENT=0 hook POST https://opencode.ai/zen/go/v1/chat/completions)"
+    eq "PORTCULLIS_TRANSPARENT=0 kill switch" "https://opencode.ai/zen/go/v1/chat/completions - opencode.ai" "$out"
+fi
+
+# --------------------------------------------------------------------------
+if [ -z "${PORTCULLIS_BIN:-}" ] || ! pyhas openai || ! pyhas anthropic; then
+    echo "== e2e: SKIPPED (set PORTCULLIS_BIN; needs openai+anthropic in $PYTHON) =="
+else
+    echo "== e2e: SDKs -> hook -> real Portcullis -> fake provider =="
+    E="${WORK}/e2e"; mkdir -p "$E/home/portcullis"; : > "$E/up.log"
+    cat > "$E/provider.py" <<'EOF'
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        open(sys.argv[1], "a").write(json.dumps({"key": self.headers.get("authorization") or self.headers.get("x-api-key"),
+            "session": self.headers.get("x-opencode-session"), "ctl": self.headers.get("x-portcullis-upstream"),
+            "body": body}) + "\n")
+        said = body["messages"][-1]["content"]
+        if self.path.endswith("/v1/messages"):
+            out = {"id": "m", "type": "message", "role": "assistant", "model": "c", "stop_reason": "end_turn",
+                   "content": [{"type": "text", "text": "You said: " + said}], "usage": {"input_tokens": 1, "output_tokens": 1}}
+        else:
+            out = {"id": "c", "object": "chat.completion", "created": 0, "model": "g",
+                   "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "You said: " + said}}]}
+        b = json.dumps(out).encode()
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+srv = ThreadingHTTPServer(("127.0.0.1", 0), H); print(srv.server_port, flush=True); srv.serve_forever()
+EOF
+    "$PYTHON" -I "$E/provider.py" "$E/up.log" > "$E/port" & UP=$!
+    BODY_CAP="$(grep -o 'PORTCULLIS_MAX_BODY_BYTES:-[0-9]*' "${REPO_DIR}/portcullis-run.sh" | cut -d- -f2)"
+    PORTCULLIS_PASSTHROUGH=1 PORTCULLIS_MAX_BODY_BYTES="$BODY_CAP" PORTCULLIS_STORE="$E/store.json" \
+        "$PORTCULLIS_BIN" serve --bind 127.0.0.1:18081 > "$E/pc.log" 2>&1 & PCP=$!
+    for _ in $(seq 50); do [ -s "$E/port" ] && curl -s 127.0.0.1:18081/healthz >/dev/null && break; sleep 0.1; done
+    PORT="$(cat "$E/port")"; touch "$E/home/portcullis/transparent"
+    HERMES_HOME="$E/home" PORTCULLIS_GATEWAY=http://127.0.0.1:18081 PYTHONPATH="$REPO_DIR" "$PYTHON" - "$PORT" > "$E/client.out" 2>&1 <<'EOF'
+import sys, portcullis_hook, openai, anthropic
+port = sys.argv[1]
+oc = openai.OpenAI(base_url=f"http://127.0.0.1:{port}/zen/go/v1", api_key="sk-real",
+                   default_headers={"x-opencode-session": "s1"}, max_retries=0)
+print(oc.chat.completions.create(model="g", messages=[{"role": "user", "content": "mail jane.doe@acme.io"}]).choices[0].message.content)
+ac = anthropic.Anthropic(base_url=f"http://127.0.0.1:{port}", api_key="sk-ant", max_retries=0)
+print(ac.messages.create(model="c", max_tokens=5, messages=[{"role": "user", "content": "I am jane.doe@acme.io"}]).content[0].text)
+big = "log line " * 380000 + " end"   # ~3.4 MiB, over Portcullis' 2 MiB default cap
+r = oc.chat.completions.create(model="g", messages=[{"role": "user", "content": big}])
+print("big ok", len(r.choices[0].message.content))
+EOF
+    eq "client exit" "0" "$?"
+    has "openai reply rehydrated" "You said: mail jane.doe@acme.io" "$E/client.out"
+    has "anthropic reply rehydrated" "You said: I am jane.doe@acme.io" "$E/client.out"
+    has "~3 MiB prompt accepted (body cap raised)" "big ok" "$E/client.out"
+    eq "provider got 3 calls" "3" "$(wc -l < "$E/up.log")"
+    hasnt "no raw email reached provider" "jane.doe@acme.io" "$E/up.log"
+    has "client key forwarded" '"key": "Bearer sk-real"' "$E/up.log"
+    has "client header forwarded" '"session": "s1"' "$E/up.log"
+    hasnt "control header not leaked" '"ctl": "http' "$E/up.log"
+    kill "$PCP"; sleep 0.3
+    HERMES_HOME="$E/home" PORTCULLIS_GATEWAY=http://127.0.0.1:18081 PYTHONPATH="$REPO_DIR" "$PYTHON" - "$PORT" > "$E/down.out" 2>&1 <<'EOF'
+import sys, portcullis_hook, openai
+oc = openai.OpenAI(base_url=f"http://127.0.0.1:{sys.argv[1]}/v1", api_key="k", max_retries=0)
+try:
+    oc.chat.completions.create(model="g", messages=[{"role": "user", "content": "x"}]); print("LEAKED")
+except openai.APIConnectionError:
+    print("failed closed")
+EOF
+    has "gateway down -> fails closed" "failed closed" "$E/down.out"
+    eq "nothing sent around a dead gateway" "3" "$(wc -l < "$E/up.log")"
+    kill "$UP" 2>/dev/null
 fi
 
 echo ""
 echo "=========================================="
-echo " Passed: $PASS   Failed: $FAIL   $([ $SKIP = 1 ] && echo '(wire tests skipped)')"
+echo " Passed: $PASS   Failed: $FAIL   $([ $SKIP = 1 ] && echo '(some cases skipped)')"
 echo "=========================================="
 [ "$FAIL" -eq 0 ]

@@ -238,40 +238,40 @@ examples if they don't already exist.
   skills/         — Custom skills
   memories/       — Persistent memory
   webui/          — WebUI state (sessions, workspace)
-  portcullis/     — PII gateway state (taught terms, admin token, saved model settings)
+  portcullis/     — PII gateway state (taught terms, admin token, on/off marker)
 ```
 
 ## PII redaction (Portcullis)
 
 The image includes [Portcullis](https://github.com/cloudsbird/Portcullis), a
-local PII gateway. It is **on by default**: every model call Hermes makes
-(gateway, dashboard and WebUI) goes through it. Before the prompt leaves the
-container, private values such as emails, phone numbers and keys are replaced
-with placeholders like `<<EMAIL_1>>`. The real values are put back into the
-reply, so the provider sees the task but never the identities.
+local PII gateway. It is **on by default** and **transparent**: Hermes keeps
+its own provider configuration (URL, key, headers) and does not know
+Portcullis is there. Before a prompt leaves the container, private values such
+as emails, phone numbers, keys and terms you taught are replaced with
+placeholders like `<<EMAIL_1>>`. The real values are put back into the reply,
+so the provider sees the task but never the identities.
 
-**How it is wired.** On every start, `start.sh` runs `portcullis-wire.py`, which:
+**How it works.** A small hook (`portcullis_hook.py`) is loaded into the Hermes
+and WebUI Python environments. Just before an LLM request is sent
+(`POST …/chat/completions` or `POST …/v1/messages`, to any provider), it
+re-points the request at Portcullis on `127.0.0.1:8080` and puts the original
+URL in an `x-portcullis-upstream` header. Portcullis (passthrough mode)
+redacts the prompt and forwards it to that URL **with Hermes' own key and
+headers**, then rehydrates the reply. So:
 
-1. reads `model.provider` / `model.base_url` / `model.api_key` from
-   `~/.hermes/config.yaml` and the matching key from `~/.hermes/.env`
-   (e.g. `OPENROUTER_API_KEY`);
-2. hands that real upstream to Portcullis;
-3. rewrites `config.yaml` so Hermes talks to `http://127.0.0.1:8080/v1`
-   (`provider: custom`). Comments are kept, and the original values are saved
-   to `~/.hermes/portcullis/original-model.json`.
+- every provider works with no extra setup, including ones that need custom
+  headers (e.g. opencode-go's `x-opencode-session`);
+- side tasks, fallbacks and delegated subagents are covered too, even when
+  they use a different provider;
+- `config.yaml` is never modified. On first start, an older release's
+  rewrite of `model.*` is put back automatically.
 
-The startup banner shows the result, e.g.
-`Portcullis: ... — active — redacting before openrouter.ai`.
+The startup banner shows `Portcullis: … active — every LLM call is redacted`.
 
-If you later change the provider in `config.yaml` (or through `hermes model`),
-just restart. The new values become the upstream and get wired again.
-
-**Turning it off.** Set `PORTCULLIS_ENABLED=false` in `versions.env` (for `./up.sh`)
-or in the compose environment, then restart. Your original `config.yaml` model
-settings are restored automatically.
-
-**Overriding the upstream.** `PORTCULLIS_UPSTREAM_URL` / `PORTCULLIS_UPSTREAM_KEY`
-in the compose environment take precedence over what is derived from `config.yaml`.
+**Turning it off.** Set `PORTCULLIS_ENABLED=false` in `versions.env` (for
+`./up.sh`) or in the compose environment, then restart. For a quick test without
+a restart, `touch`/`rm` the file `~/.hermes/portcullis/transparent` (the hook
+checks it on every request).
 
 **Teaching it your private terms** (client names, projects, colleagues). Any
 term you teach is redacted on every later request:
@@ -303,22 +303,16 @@ put it under `~/.hermes/portcullis/model/`, and set
 
 **Limitations**
 
-- Only OpenAI-compatible (chat-completions) providers are proxied. With
-  `anthropic`, `nous`, `openai-codex`, `copilot`, `bedrock` or `gemini`, the
-  banner says `NOT ACTIVE` and Hermes talks to the provider directly.
-- Side tasks (compression, vision, titles, …) left on `provider: auto` use
-  the main route, so they **are** redacted. Hermes only routes elsewhere when
-  you configure it to: `auxiliary.<task>.provider/base_url`, `fallback_providers`
-  / `fallback_model`, or `delegation.provider`. Those routes are **not**
-  redacted. The startup log names each one (`WARNING: ... is NOT redacted`),
-  and the banner shows how many there are.
-- Portcullis does not serve `/v1/models`, so Hermes looks up the context
-  window by model name (models.dev / OpenRouter catalog). If it gets it
-  wrong, set `model.context_length` in `config.yaml`.
-- Port 8080 is never published: the proxy endpoints have no authentication
-  and forward requests using your provider key. Do not add a port mapping for it.
-- If Portcullis crashes, model calls fail rather than bypass it. That is fail
-  closed, by design. supervisord restarts it.
+- Protocols Portcullis cannot redact are sent directly, **unredacted**, with
+  a one-time `WARNING: … NOT redacted` in the log: the OpenAI Responses API
+  (used by `openai-codex`), native Gemini, and Bedrock (which does not use
+  httpx). Chat-completions and Anthropic Messages providers are covered.
+- Only Python processes in the Hermes/WebUI venvs are hooked. A tool that calls
+  an LLM from another runtime (Node, curl) goes direct.
+- If Portcullis is down while the hook is active, model calls fail rather than
+  bypass it. That is fail closed, by design. supervisord restarts it.
+- Port 8080 is never published: Portcullis only listens on loopback. Do not add
+  a port mapping for it.
 
 ## Stopping
 
@@ -634,7 +628,10 @@ hermes-suite/
   versions.env         — Pinned component versions for current release
   supervisord.conf     — Process manager config (4 services)
   start.sh             — Container entrypoint (UID setup + launch)
-  portcullis-wire.py   — Points Hermes' config.yaml at the Portcullis gateway
+  portcullis_hook.py   — httpx hook that routes Hermes' LLM calls through Portcullis
+  portcullis-run.sh    — supervisord launcher for Portcullis (passthrough mode)
+  portcullis-hook-check.py — Proves the hook really loaded (build time + startup banner)
+  portcullis-wire.py   — One-time migration: restores config.yaml rewired by older releases
   docker-compose.yaml  — Podman/Docker Compose configuration (local use)
   docker-compose.dokploy.yaml — Compose variant for Dokploy/remote VPS deploys
   build.sh             — Build helper script (reads versions.env)

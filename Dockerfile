@@ -29,7 +29,7 @@ ARG ENABLE_WHATSAPP_BRIDGE=false
 # ort's prebuilt static ONNX Runtime needs glibc >= 2.38 and GCC >= 13
 # (__isoc23_strtol, _M_replace_cold), which bookworm (2.36 / GCC 12) lacks.
 FROM docker.io/library/rust:1-slim-trixie AS portcullis-builder
-ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
+ARG PORTCULLIS_VERSION=32cd9929b2b29624bae009df33df7a21c1f864bd
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates pkg-config libssl-dev cmake clang \
     && rm -rf /var/lib/apt/lists/*
@@ -155,12 +155,24 @@ RUN chown -R hermes:hermes /opt/hermes-webui/venv
 # ---------------------------------------------------------------------------
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY start.sh /opt/hermes-suite/start.sh
-COPY portcullis-wire.py /opt/hermes-suite/portcullis-wire.py
-RUN chmod +x /opt/hermes-suite/start.sh
+COPY portcullis-wire.py portcullis-run.sh portcullis_hook.py portcullis-hook-check.py /opt/hermes-suite/
+RUN chmod +x /opt/hermes-suite/start.sh /opt/hermes-suite/portcullis-run.sh
 
 # Portcullis binary (see Stage 0). Runs as a supervisord program on
-# 127.0.0.1:8080 only — never exposed; start.sh wires Hermes to it.
+# 127.0.0.1:8080 only — never exposed — in transparent passthrough mode.
 COPY --from=portcullis-builder /src/target/release/portcullis /usr/local/bin/portcullis
+
+# Transparent routing: install portcullis_hook into both Python environments
+# that make LLM calls (agent/gateway/dashboard and the webui). A .pth file
+# imports it at interpreter start; it patches httpx on first import and only
+# acts while /opt/data/portcullis/transparent exists. Hermes' config is never
+# touched. Verified at build time so a broken hook fails the build.
+RUN for py in /opt/hermes/.venv/bin/python3 /opt/hermes-webui/venv/bin/python3; do \
+        site="$("$py" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" && \
+        cp /opt/hermes-suite/portcullis_hook.py "$site/portcullis_hook.py" && \
+        echo "import portcullis_hook" > "$site/portcullis_hook.pth" && \
+        "$py" /opt/hermes-suite/portcullis-hook-check.py || exit 1; \
+    done
 
 # ---------------------------------------------------------------------------
 # Patch: disable dashboard auto-sso — the upstream middleware auto-redirects
@@ -177,7 +189,7 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 ARG AGENT_VERSION=v0.23.0
 ARG ENABLE_WHATSAPP_BRIDGE=false
 ARG HERMES_WEBUI_VERSION=v0.52.544
-ARG PORTCULLIS_VERSION=eba0d2ee809d3a456af76c22c2d808a02e553eb5
+ARG PORTCULLIS_VERSION=32cd9929b2b29624bae009df33df7a21c1f864bd
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
