@@ -43,7 +43,7 @@ RUN git init -q . && \
 
 # ---------------------------------------------------------------------------
 # Stage 1: Use the official hermes-agent image as the base
-# This already contains: Python 3.13, Node.js, npm, Playwright, agent code,
+# This already contains: Python 3.13, Node.js, npm, pinned Chromium, agent code,
 # the built-in web dashboard (hermes dashboard), and the gateway (uv is added below).
 # ---------------------------------------------------------------------------
 FROM docker.io/nousresearch/hermes-agent:${AGENT_VERSION}
@@ -70,15 +70,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN echo "hermes ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # ---------------------------------------------------------------------------
-# Stage 3: Install Browser tool dependencies for agent
-# npm install + Playwright chromium (needed by browser toolset).
-# Skipped entirely when INSTALL_BROWSER=false (ENABLE_BROWSER=false in
-# versions.env, or ./build.sh --no-browser): the base image ships a
-# preinstalled Chromium under /opt/hermes/.playwright — the skip branch
-# removes it so `-slim` images genuinely exclude local browser binaries
-# (measured on arm64: full 4.44GB -> slim 3.34GB). Edge devices can use a
-# cloud browser backend instead of local Chromium. node_modules is kept —
-# the TUI and dashboard need it.
+# Stage 3: Browser (Chromium) for the agent's browser toolset
+# Since v0.23.1 the base image's pm provisioner stages a pinned, sha256-
+# verified full Chromium (plus the shared libs it links against) into the
+# tool store at /opt/hermes/tools and bakes its path into
+# /etc/hermes/chromium-executable-path. The runtime image carries no pnpm or
+# workspace node_modules, and the agent's package.json preinstall hook now
+# refuses plain `npm install`, so the old npm + `npx playwright install`
+# step is gone: the full image uses the base image's browser as-is.
+# When INSTALL_BROWSER=false (ENABLE_BROWSER=false in versions.env, or
+# ./build.sh --no-browser) only the Chromium entry is removed from the tool
+# store (node/npm/uv/ffmpeg live there too and stay), along with the baked
+# path, so `-slim` images genuinely exclude local browser binaries. Edge
+# devices can use a cloud browser backend instead.
 # WhatsApp bridge is removed by default (ENABLE_WHATSAPP_BRIDGE=false).
 # Set --build-arg ENABLE_WHATSAPP_BRIDGE=true or use --whatsapp flag in
 # build.sh to include it.
@@ -89,15 +93,23 @@ RUN echo "hermes ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 # disables the toggles (that is how the --whatsapp flag used to be a no-op).
 ARG INSTALL_BROWSER=true
 ARG ENABLE_WHATSAPP_BRIDGE=false
-RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
-        cd /opt/hermes && \
-        npm install --prefer-offline --no-audit && \
-        npx playwright install --with-deps chromium; \
+RUN set -eu; \
+    cd /opt/hermes; \
+    if [ "$INSTALL_BROWSER" = "true" ]; then \
+        browser_bin="$(cat /etc/hermes/chromium-executable-path)"; \
+        "$browser_bin" --version; \
     else \
+        chromium_dir="$(python3 -c 'from pm import installed_package; p = installed_package("chromium"); print(p.path if p else "")')"; \
+        case "$chromium_dir" in \
+            /opt/hermes/tools/*[Cc]hrom*) rm -rf "$chromium_dir" ;; \
+            "") echo "no pm-staged Chromium to remove" ;; \
+            *) echo "refusing to remove unexpected Chromium path: $chromium_dir" >&2; exit 1 ;; \
+        esac; \
+        rm -f /etc/hermes/chromium-executable-path; \
         rm -rf /opt/hermes/.playwright; \
-    fi && \
-    if [ "$ENABLE_WHATSAPP_BRIDGE" != "true" ]; then rm -rf /opt/hermes/scripts/whatsapp-bridge; fi && \
-    rm -rf /var/lib/apt/lists/*
+        node --version && npm --version && rg --version >/dev/null && ffmpeg -version >/dev/null; \
+    fi; \
+    if [ "$ENABLE_WHATSAPP_BRIDGE" != "true" ]; then rm -rf /opt/hermes/scripts/whatsapp-bridge; fi
 
 # ---------------------------------------------------------------------------
 # Stage 4: Install supervisord via uv (not available in Debian Trixie apt)
@@ -202,7 +214,6 @@ LABEL org.opencontainers.image.title="Hermes Suite" \
 ENV PATH="/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:$PATH"
 ENV HERMES_HOME=/opt/data
 ENV HERMES_DATA_DIR=/opt/data
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 
 # hermes-agent web dist (built into the base image)
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist

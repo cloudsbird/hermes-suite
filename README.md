@@ -70,7 +70,7 @@ If you prefer not to build manually, use our pre-verified image tags from
 [GitHub Container Registry](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite):
 
 ```bash
-podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.544
+podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.544-r2
 ```
 
 ### Manual Build with Specific Versions
@@ -111,7 +111,7 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 | Suite Tag | Agent Version | WebUI Version | Tested |
 |-----------|---------------|---------------|--------|
-| `0.23.1-0.52.544` | v0.23.1 | v0.52.544 | amd64 + arm64 |
+| `0.23.1-0.52.544-r2` | v0.23.1 | v0.52.544 | amd64 + arm64 |
 
 > **Full version history:** https://github.com/sunnysktsang/hermes-suite/releases
 
@@ -358,8 +358,8 @@ DASHBOARD_CREDENTIAL=admin:admin
 # Include WhatsApp bridge: true, false (default: false)
 ENABLE_WHATSAPP_BRIDGE=false
 
-# Install local Playwright/Chromium browser tooling: true (default), false
-# false produces a smaller/faster-building image tagged `-slim`, for
+# Keep local Chromium browser tooling: true (default), false
+# false produces an image without local Chromium, tagged `-slim`, for
 # low-resource edge devices (use a cloud browser backend instead)
 ENABLE_BROWSER=true
 ```
@@ -370,7 +370,7 @@ ENABLE_BROWSER=true
 | `USE_SUDO` | `true`, `false` | `false` | Run docker/podman commands with sudo (rootful mode) |
 | `DASHBOARD_CREDENTIAL` | `admin:admin`, `auto`, `user:pass` | `admin:admin` | Dashboard login credential |
 | `ENABLE_WHATSAPP_BRIDGE` | `true`, `false` | `false` | Include WhatsApp bridge in the built image |
-| `ENABLE_BROWSER` | `true`, `false` | `true` | Install local Playwright/Chromium. `false` builds a `-slim` image (measured ~1.1GB smaller on arm64) that also strips the base image's preinstalled Chromium, for low-resource edge devices. |
+| `ENABLE_BROWSER` | `true`, `false` | `true` | Keep local Chromium. `false` builds a `-slim` image without the base image's pinned Chromium, for low-resource edge devices. Since v0.23.1 Chromium ships in the base image's layers, so `-slim` no longer reduces pull size. |
 
 Then rebuild:
 
@@ -409,7 +409,7 @@ ENABLE_WHATSAPP_BRIDGE=true
 
 ### Browser tooling and the -slim image
 
-Set `ENABLE_BROWSER=false` (or run `./build.sh --no-browser`) to build an image without local browser tooling. The build skips the Playwright/Chromium install stage and removes the base image's preinstalled Chromium, and tags the result with a `-slim` suffix (measured on arm64: 4.44GB full, 3.34GB slim). This is intended for low-resource edge devices, which can use a cloud browser backend instead of local Chromium. The default (`true`) keeps current behavior; `node_modules` is retained either way, since the TUI and dashboard need it.
+Set `ENABLE_BROWSER=false` (or run `./build.sh --no-browser`) to build an image without local browser tooling. The build removes the base image's pinned Chromium and tags the result with a `-slim` suffix (before v0.23.1 this saved ~1.1GB on arm64; since v0.23.1 Chromium ships in the base image's own layers, so removing it no longer reduces pull or disk size — `-slim` now only guarantees no local browser is present). This is intended for low-resource edge devices, which can use a cloud browser backend instead of local Chromium. The default (`true`) keeps the base image's Chromium.
 
 ```bash
 # Option 1: CLI flag
@@ -435,8 +435,7 @@ What to expect from a `-slim` runtime:
   a one-time ~170 MB Chromium download on first browser use (x86-64 only;
   disable via `security.allow_lazy_installs`).
 - On ARM64 no official Chromium build exists, so local browser tooling is
-  unavailable in either image — `-slim` costs nothing there and saves ~1.1GB
-  of disk/pull.
+  unavailable in either image — `-slim` costs nothing there.
 
 ### Changing the workspace path
 
@@ -498,7 +497,7 @@ for a remote VPS deploy instead of local Podman/Docker use:
    ```env
    # Pin a different image tag (see the Version Compatibility Table above),
    # or add -slim for the browser-less variant.
-   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.544
+   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.544-r2
 
    # Avoid host port collisions with other apps on the same VPS.
    GATEWAY_PORT=8642
@@ -600,12 +599,13 @@ is available at `/usr/local/bin/uv`.
 The Dockerfile performs these steps:
 
 1. **Base image** — Uses the official `nousresearch/hermes-agent` image which already
-   contains Python 3.13, Node.js, npm, Playwright, the agent code, and the built-in
-   dashboard.
+   contains Python 3.13, Node.js, npm, a pinned Chromium, the agent code, and the
+   built-in dashboard.
 
 2. **System packages** — Installs sudo, git, nano, network tools, and other utilities.
 
-3. **Browser tools** — Installs Playwright Chromium for the browser toolset.
+3. **Browser tools** — Keeps the base image's pinned Chromium for the browser toolset
+   (or removes it for `-slim` builds).
 
 4. **Supervisor** — Installs supervisord via pip into a dedicated venv at `/opt/supervisor`
    (not available in Debian Trixie apt repos).
