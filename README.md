@@ -300,6 +300,9 @@ RAM. The binary is built with ONNX support. To add the GLiNER2 detector (about
 [Portcullis docs](https://github.com/cloudsbird/Portcullis#the-detector-model),
 put it under `~/.hermes/portcullis/model/`, and set
 `PORTCULLIS_MODEL_DIR=/opt/data/portcullis/model` in the compose environment.
+If the detector fails on a request, Portcullis still sends it with dictionary
+and regex coverage (and rescans that text next turn). Set
+`PORTCULLIS_DETECTOR_FAIL_CLOSED=1` to block such requests with a 503 instead.
 
 **Limitations**
 

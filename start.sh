@@ -98,7 +98,7 @@ setup_portcullis() {
     {
         echo "PORTCULLIS_ENABLED=true"
         if [ -n "$token" ]; then printf 'PORTCULLIS_ADMIN_TOKEN=%q\n' "$token"; fi
-        for v in PORTCULLIS_MODEL_DIR PORTCULLIS_THRESHOLD PORTCULLIS_STORE_KEY_FILE PORTCULLIS_LOG_FORMAT; do
+        for v in PORTCULLIS_MODEL_DIR PORTCULLIS_THRESHOLD PORTCULLIS_DETECTOR_FAIL_CLOSED PORTCULLIS_STORE_KEY_FILE PORTCULLIS_LOG_FORMAT; do
             if [ -n "${!v:-}" ]; then printf '%s=%q\n' "$v" "${!v}"; fi
         done
         true

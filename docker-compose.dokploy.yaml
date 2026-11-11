@@ -60,6 +60,7 @@ services:
       - PORTCULLIS_ENABLED=${PORTCULLIS_ENABLED:-true}
       - PORTCULLIS_ADMIN_TOKEN=${PORTCULLIS_ADMIN_TOKEN:-}
       - PORTCULLIS_MODEL_DIR=${PORTCULLIS_MODEL_DIR:-}
+      - PORTCULLIS_DETECTOR_FAIL_CLOSED=${PORTCULLIS_DETECTOR_FAIL_CLOSED:-}
       - PATH=/opt/hermes/.venv/bin:/opt/hermes-webui/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     # Overrides the image healthcheck so already-built images work too. Only
     # the WebUI port is checked: Traefik hides unhealthy containers (404), and
