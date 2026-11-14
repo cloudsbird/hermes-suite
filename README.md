@@ -70,7 +70,7 @@ If you prefer not to build manually, use our pre-verified image tags from
 [GitHub Container Registry](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite):
 
 ```bash
-podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.667-r2
+podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.667-r1
 ```
 
 ### Manual Build with Specific Versions
@@ -111,7 +111,7 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 | Suite Tag | Agent Version | WebUI Version | Tested |
 |-----------|---------------|---------------|--------|
-| `0.23.1-0.52.667-r2` | v0.23.1 | v0.52.667 | amd64 + arm64 |
+| `0.23.1-0.52.667-r1` | v0.23.1 | v0.52.667 | amd64 + arm64 |
 
 > **Full version history:** https://github.com/sunnysktsang/hermes-suite/releases
 
@@ -314,6 +314,11 @@ and regex coverage (and rescans that text next turn). Set
   an LLM from another runtime (Node, curl) goes direct.
 - If Portcullis is down while the hook is active, model calls fail rather than
   bypass it. That is fail closed, by design. supervisord restarts it.
+- Message text, tool-call arguments and replayed reasoning are redacted. A taught
+  term anywhere else (tool definitions, signed reasoning from Claude/Gemini
+  models via OpenRouter, which cannot be edited) blocks the request instead:
+  HTTP 502 `residual protected term in outbound at <field>`. Nothing is sent.
+  For signed reasoning, start a new conversation; otherwise report the field.
 - Port 8080 is never published: Portcullis only listens on loopback. Do not add
   a port mapping for it.
 
@@ -497,7 +502,7 @@ for a remote VPS deploy instead of local Podman/Docker use:
    ```env
    # Pin a different image tag (see the Version Compatibility Table above),
    # or add -slim for the browser-less variant.
-   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.667-r2
+   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.667-r1
 
    # Avoid host port collisions with other apps on the same VPS.
    GATEWAY_PORT=8642
