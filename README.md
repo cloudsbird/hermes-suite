@@ -70,7 +70,7 @@ If you prefer not to build manually, use our pre-verified image tags from
 [GitHub Container Registry](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite):
 
 ```bash
-podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.678-r1
+podman pull ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.679-r1
 ```
 
 ### Manual Build with Specific Versions
@@ -80,8 +80,8 @@ If you need a specific combination, pass the versions as build arguments:
 ```bash
 podman build \
   --build-arg AGENT_VERSION=v0.23.1 \
-  --build-arg HERMES_WEBUI_VERSION=v0.52.678 \
-  -t hermes-suite:0.23.1-0.52.678 .
+  --build-arg HERMES_WEBUI_VERSION=v0.52.679 \
+  -t hermes-suite:0.23.1-0.52.679 .
 ```
 
 Or use the build helper (reads from `versions.env`):
@@ -97,7 +97,7 @@ Or use the build helper (reads from `versions.env`):
 ./build.sh --docker-nolog
 
 # Override defaults:
-# ./build.sh --agent v0.23.1 --webui v0.52.678
+# ./build.sh --agent v0.23.1 --webui v0.52.679
 ```
 
 > **Docker compatibility:** Docker CE is auto-detected at container startup via /proc/1/cgroup.
@@ -111,7 +111,7 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 | Suite Tag | Agent Version | WebUI Version | Tested |
 |-----------|---------------|---------------|--------|
-| `0.23.1-0.52.678-r1` | v0.23.1 | v0.52.678 | amd64 + arm64 |
+| `0.23.1-0.52.679-r1` | v0.23.1 | v0.52.679 | amd64 + arm64 |
 
 > **Full version history:** https://github.com/sunnysktsang/hermes-suite/releases
 
@@ -119,7 +119,7 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 Suite tags follow the pattern `{agent_date}-{webui_semver}`:
 - **Agent**: date-based version from `nousresearch/hermes-agent` (e.g. `v0.23.1`)
-- **WebUI**: semantic version from `nesquena/hermes-webui` (e.g. `v0.52.678`)
+- **WebUI**: semantic version from `nesquena/hermes-webui` (e.g. `v0.52.679`)
 
 The pinned pair for each release is declared in `versions.env`.
 
@@ -144,8 +144,8 @@ Or manually with pinned versions:
 ```bash
 podman build \
   --build-arg AGENT_VERSION=v0.23.1 \
-  --build-arg HERMES_WEBUI_VERSION=v0.52.678 \
-  -t ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.678 .
+  --build-arg HERMES_WEBUI_VERSION=v0.52.679 \
+  -t ghcr.io/cloudsbird/hermes-suite:0.23.1-0.52.679 .
 ```
 
 ### 3. Start the container
@@ -349,7 +349,7 @@ Edit `versions.env` to change the pinned versions and runtime settings:
 
 ```env
 AGENT_VERSION=v0.23.1
-WEBUI_VERSION=v0.52.678
+WEBUI_VERSION=v0.52.679
 
 # Runtime selector: auto (default), podman, docker, docker-nolog
 CONTAINER_RUNTIME=auto
@@ -502,7 +502,7 @@ for a remote VPS deploy instead of local Podman/Docker use:
    ```env
    # Pin a different image tag (see the Version Compatibility Table above),
    # or add -slim for the browser-less variant.
-   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.678-r1
+   HERMES_SUITE_IMAGE_TAG=0.23.1-0.52.679-r1
 
    # Avoid host port collisions with other apps on the same VPS.
    GATEWAY_PORT=8642
