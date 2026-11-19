@@ -11,7 +11,7 @@
 #   hermes-webui     — Browser chat interface on port 8787
 #   portcullis       — PII-redacting LLM gateway on 127.0.0.1:8080 (internal)
 #
-# Build:  podman build -t hermes-suite:0.23.2-0.52.679 .
+# Build:  podman build -t hermes-suite:0.23.2-0.52.701 .
 # Run:    podman-compose up -d
 # =============================================================================
 
@@ -146,7 +146,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor && \
 #
 # PIN to a specific tag for reproducible builds — never use 'master'.
 # ---------------------------------------------------------------------------
-ARG HERMES_WEBUI_VERSION=v0.52.679
+ARG HERMES_WEBUI_VERSION=v0.52.701
 RUN cd /opt && \
     git clone --depth 1 --branch ${HERMES_WEBUI_VERSION} \
         https://github.com/nesquena/hermes-webui.git hermes-webui && \
@@ -200,7 +200,7 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 # Re-declare ARGs after FROM so they are available in LABEL
 ARG AGENT_VERSION=v0.23.2
 ARG ENABLE_WHATSAPP_BRIDGE=false
-ARG HERMES_WEBUI_VERSION=v0.52.679
+ARG HERMES_WEBUI_VERSION=v0.52.701
 ARG PORTCULLIS_VERSION=0f698483e157bcd6e86a4fdc1599220617e1a353
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
