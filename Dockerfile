@@ -29,7 +29,7 @@ ARG ENABLE_WHATSAPP_BRIDGE=false
 # ort's prebuilt static ONNX Runtime needs glibc >= 2.38 and GCC >= 13
 # (__isoc23_strtol, _M_replace_cold), which bookworm (2.36 / GCC 12) lacks.
 FROM docker.io/library/rust:1-slim-trixie AS portcullis-builder
-ARG PORTCULLIS_VERSION=0f698483e157bcd6e86a4fdc1599220617e1a353
+ARG PORTCULLIS_VERSION=2de338386d901cbdb81261ebadb9c1627cd955d6
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates pkg-config libssl-dev cmake clang \
     && rm -rf /var/lib/apt/lists/*
@@ -203,7 +203,7 @@ RUN sed -i 's/auto = _auto_sso_response(request)/auto = None  # disabled: BasicA
 ARG AGENT_VERSION=v0.23.3
 ARG ENABLE_WHATSAPP_BRIDGE=false
 ARG HERMES_WEBUI_VERSION=v0.52.702
-ARG PORTCULLIS_VERSION=0f698483e157bcd6e86a4fdc1599220617e1a353
+ARG PORTCULLIS_VERSION=2de338386d901cbdb81261ebadb9c1627cd955d6
 
 LABEL org.opencontainers.image.title="Hermes Suite" \
       org.opencontainers.image.description="All-in-one: hermes-agent + hermes-webui + hermes-dashboard" \
