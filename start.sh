@@ -58,6 +58,8 @@ setup_webui_auth() {
 # Portcullis forwards it to the real provider with Hermes' own key/headers.
 # Settings go to $HERMES_HOME/portcullis/env, read by portcullis-run.sh, so the
 # program survives supervisord restarts. Never blocks container startup.
+# `portcullis-ctl off|on` persists a runtime switch in $HERMES_HOME/portcullis/override.
+# Precedence: PORTCULLIS_ENABLED=false (always off) > override > default (on).
 setup_portcullis() {
     local state_dir="$HERMES_HOME/portcullis"
     local enabled="${PORTCULLIS_ENABLED:-true}"
@@ -69,6 +71,14 @@ setup_portcullis() {
         echo "Warning: $state_dir is not writable — Portcullis disabled, LLM calls NOT redacted"
         PORTCULLIS_STATUS="NOT ACTIVE — $state_dir not writable"
         return 0
+    fi
+
+    # Hermes skill that lets the agent teach terms when asked ("keep X private").
+    # Installed once; a copy the user edited is never overwritten.
+    local skill_src=/opt/hermes-suite/skills/portcullis/SKILL.md
+    local skill_dst="$HERMES_HOME/skills/security/portcullis/SKILL.md"
+    if [ -f "$skill_src" ] && [ ! -e "$skill_dst" ]; then
+        mkdir -p "$(dirname "$skill_dst")" && cp "$skill_src" "$skill_dst" 2>/dev/null || true
     fi
 
     # Migration: older releases rewrote model.* in config.yaml. Put it back.
@@ -103,6 +113,18 @@ setup_portcullis() {
         done
         true
     } > "$state_dir/env.tmp" && chmod 600 "$state_dir/env.tmp" && mv "$state_dir/env.tmp" "$state_dir/env"
+
+    # `portcullis-ctl off` (persisted). The env file above is still written in full,
+    # so `portcullis-ctl on` can start Portcullis later without a restart; only the
+    # routing marker is skipped.
+    local override
+    override=""
+    if [ -r "$state_dir/override" ]; then override="$(tr -d '[:space:]' < "$state_dir/override")"; fi
+    if [ "$override" = "off" ]; then
+        rm -f "$state_dir/transparent"
+        PORTCULLIS_STATUS="disabled (portcullis-ctl off) — LLM calls NOT redacted; re-enable with: portcullis-ctl on"
+        return 0
+    fi
 
     # Turns the httpx hook on (it checks for this file on every request).
     : > "$state_dir/transparent"

@@ -23,6 +23,12 @@ if [ "${PORTCULLIS_ENABLED:-true}" = "false" ]; then
     exit 0   # supervisord: exitcodes=0 + autorestart=unexpected => stays stopped
 fi
 
+# `portcullis-ctl off`, read at run time so a supervisord restart keeps it off.
+if [ -r "$STATE_DIR/override" ] && [ "$(tr -d '[:space:]' < "$STATE_DIR/override")" = "off" ]; then
+    echo "[portcullis] off (portcullis-ctl off) — not starting; re-enable with: portcullis-ctl on"
+    exit 0
+fi
+
 if [ -z "${PORTCULLIS_ADMIN_TOKEN:-}" ] && [ -s "$STATE_DIR/admin_token" ]; then
     PORTCULLIS_ADMIN_TOKEN="$(cat "$STATE_DIR/admin_token")"
 fi

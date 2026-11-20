@@ -10,8 +10,8 @@
 # skipped if the module is missing:
 #   PYTHON=/path/to/venv/bin/python bash tests/test_portcullis.sh
 #
-# Optional end-to-end run of the transparent route through a real Portcullis
-# binary (built with passthrough support) using the openai/anthropic SDKs:
+# Optional end-to-end run of the transparent route (and portcullis-ctl) through
+# a real Portcullis binary using the openai/anthropic SDKs:
 #   PORTCULLIS_BIN=/path/to/portcullis PYTHON=... bash tests/test_portcullis.sh
 # =============================================================================
 set -u
@@ -77,9 +77,12 @@ hasnt "no env-dependent autostart" "ENV_PORTCULLIS" "${REPO_DIR}/supervisord.con
 has "hook installed into venvs" "portcullis_hook.pth" "${REPO_DIR}/Dockerfile"
 
 echo "== shell syntax =="
-for f in start.sh portcullis-run.sh; do
+for f in start.sh portcullis-run.sh portcullis-ctl; do
     bash -n "${REPO_DIR}/$f" && ok "bash -n $f" || bad "bash -n $f"
 done
+has "image ships portcullis-ctl" "ln -sf /opt/hermes-suite/portcullis-ctl /usr/local/bin/portcullis-ctl" "${REPO_DIR}/Dockerfile"
+has "image ships the skill" "COPY skills/portcullis/SKILL.md" "${REPO_DIR}/Dockerfile"
+[ -f "${REPO_DIR}/skills/portcullis/SKILL.md" ] && ok "skill file exists" || bad "skill file exists"
 
 echo "== portcullis-run.sh: disabled exits 0 without starting =="
 H="${WORK}/run"; mkdir -p "$H/portcullis"
@@ -87,6 +90,64 @@ echo "PORTCULLIS_ENABLED=false" > "$H/portcullis/env"
 HERMES_HOME="$H" bash "${REPO_DIR}/portcullis-run.sh" > "$H/out" 2>&1
 eq "exit code 0 when disabled" "0" "$?"
 has "says disabled" "disabled" "$H/out"
+
+echo "== portcullis-run.sh: portcullis-ctl off keeps it stopped =="
+H="${WORK}/run2"; mkdir -p "$H/portcullis"
+echo "PORTCULLIS_ENABLED=true" > "$H/portcullis/env"; echo off > "$H/portcullis/override"
+HERMES_HOME="$H" bash "${REPO_DIR}/portcullis-run.sh" > "$H/out" 2>&1
+eq "exit code 0 when overridden off" "0" "$?"
+has "says portcullis-ctl off" "portcullis-ctl off" "$H/out"
+
+echo "== start.sh setup_portcullis: precedence env > override > default =="
+# Run just the function; the image-only paths it touches are absent here and skipped.
+eval "$(sed -n '/^setup_portcullis() {/,/^}/p' "${REPO_DIR}/start.sh")"
+setup() { ( HERMES_HOME="$1"; shift; export "$@"; setup_portcullis >/dev/null 2>&1; echo "$PORTCULLIS_STATUS" ); }
+H="${WORK}/sp1"; mkdir -p "$H"
+st="$(setup "$H" PORTCULLIS_ENABLED=true)"
+[ -e "$H/portcullis/transparent" ] && ok "default: routing marker created" || bad "default: routing marker created"
+case "$st" in active*) ok "default: status active" ;; *) bad "default: status active (got '$st')" ;; esac
+H="${WORK}/sp2"; mkdir -p "$H/portcullis"; echo off > "$H/portcullis/override"; touch "$H/portcullis/transparent"
+st="$(setup "$H" PORTCULLIS_ENABLED=true)"
+[ ! -e "$H/portcullis/transparent" ] && ok "override off: no routing marker" || bad "override off: no routing marker"
+has "override off: env still enabled (so 'on' works later)" "PORTCULLIS_ENABLED=true" "$H/portcullis/env"
+has "override off: token still written" "PORTCULLIS_ADMIN_TOKEN=" "$H/portcullis/env"
+case "$st" in *"portcullis-ctl off"*) ok "override off: banner says so" ;; *) bad "override off: banner says so (got '$st')" ;; esac
+H="${WORK}/sp3"; mkdir -p "$H/portcullis"; echo on > "$H/portcullis/override"
+setup "$H" PORTCULLIS_ENABLED=false >/dev/null
+[ ! -e "$H/portcullis/transparent" ] && ok "env false beats override on" || bad "env false beats override on"
+has "env false: launcher told to stay off" "PORTCULLIS_ENABLED=false" "$H/portcullis/env"
+
+echo "== portcullis-ctl: off / on safety =="
+printf '%s\n' '#!/bin/bash' 'echo "supervisorctl $*" >> "${CTL_LOG:?}"' > "${BIN}/supervisorctl"
+printf '%s\n' '#!/bin/bash' '[ "$1" = "-n" ] && shift' 'exec "$@"' > "${BIN}/sudo"
+chmod +x "${BIN}/supervisorctl" "${BIN}/sudo"
+ctl() { env PATH="${BIN}:$PATH" HERMES_HOME="$H" CTL_LOG="$H/ctl.log" \
+    PORTCULLIS_GATEWAY=http://127.0.0.1:1 PORTCULLIS_CTL_HEALTH_WAIT=1 \
+    bash "${REPO_DIR}/portcullis-ctl" "$@"; }
+H="${WORK}/ctl1"; mkdir -p "$H/portcullis"; touch "$H/portcullis/transparent"
+echo "PORTCULLIS_ENABLED=true" > "$H/portcullis/env"
+ctl off > "$H/out" 2>&1
+eq "off: exit 0" "0" "$?"
+eq "off: override persisted" "off" "$(cat "$H/portcullis/override")"
+[ ! -e "$H/portcullis/transparent" ] && ok "off: routing stopped" || bad "off: routing stopped"
+has "off: process stopped" "supervisorctl -c /etc/supervisor/supervisord.conf stop portcullis" "$H/ctl.log"
+ctl on > "$H/out" 2>&1
+[ "$?" != "0" ] && ok "on: fails when the gateway never gets healthy" || bad "on: fails when the gateway never gets healthy"
+[ ! -e "$H/portcullis/transparent" ] && ok "on: never routes to a dead gateway" || bad "on: never routes to a dead gateway"
+has "on: says chats still work" "routing NOT enabled" "$H/out"
+echo "PORTCULLIS_ENABLED=false" > "$H/portcullis/env"
+ctl on > "$H/out" 2>&1
+[ "$?" != "0" ] && ok "on: refused when PORTCULLIS_ENABLED=false" || bad "on: refused when PORTCULLIS_ENABLED=false"
+has "on: explains the env override" "PORTCULLIS_ENABLED=false" "$H/out"
+ctl status > "$H/out" 2>&1
+has "status: reports off" "Portcullis: OFF" "$H/out"
+echo "PORTCULLIS_ENABLED=true" > "$H/portcullis/env"; touch "$H/portcullis/transparent"
+ctl status > "$H/out" 2>&1
+[ "$?" != "0" ] && ok "status: non-zero when routing to a dead gateway" || bad "status: non-zero when routing to a dead gateway"
+has "status: says BROKEN" "BROKEN" "$H/out"
+H="${WORK}/ctl2"; mkdir -p "$H/portcullis"
+ctl status > "$H/out" 2>&1
+hasnt "status: no noise without an override file" "No such file" "$H/out"
 
 pyhas() { "$PYTHON" -c "import $1" 2>/dev/null; }
 
@@ -177,6 +238,21 @@ EOF
     has "unsupported protocol warns" "NOT redacted" "$H/warn"
     out="$(PORTCULLIS_TRANSPARENT=0 hook POST https://opencode.ai/zen/go/v1/chat/completions)"
     eq "PORTCULLIS_TRANSPARENT=0 kill switch" "https://opencode.ai/zen/go/v1/chat/completions - opencode.ai" "$out"
+
+    echo "== hook: gateway down -> 503 with a message, nothing sent =="
+    out="$(HERMES_HOME="$H" PORTCULLIS_GATEWAY=http://127.0.0.1:1 PYTHONPATH="$REPO_DIR" "$PYTHON" - 2>/dev/null <<'PYEOF'
+import asyncio, portcullis_hook, httpx
+r = httpx.Client().post("https://api.provider.invalid/v1/chat/completions", json={"messages": []})
+print(r.status_code, r.json()["error"]["code"], "NOT sent" in r.json()["error"]["message"])
+async def a():
+    async with httpx.AsyncClient() as c:
+        r = await c.post("https://api.anthropic.invalid/v1/messages", json={"messages": []})
+        print(r.status_code, r.json()["type"], r.json()["error"]["type"])
+asyncio.run(a())
+PYEOF
+)"
+    eq "openai shape (sync)" "503 portcullis_down True" "$(echo "$out" | sed -n 1p)"
+    eq "anthropic shape (async)" "503 error api_error" "$(echo "$out" | sed -n 2p)"
 fi
 
 # --------------------------------------------------------------------------
@@ -196,7 +272,13 @@ class H(BaseHTTPRequestHandler):
             "session": self.headers.get("x-opencode-session"), "ctl": self.headers.get("x-portcullis-upstream"),
             "body": body}) + "\n")
         said = body["messages"][-1]["content"]
-        if self.path.endswith("/v1/messages"):
+        if body.get("tool_choice") == "echo":
+            # Echo what the provider saw back as tool-call arguments (JSON text).
+            msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "t1", "type": "function",
+                   "function": {"name": "echo", "arguments": json.dumps({"echo": said})}}]}
+            out = {"id": "c", "object": "chat.completion", "created": 0, "model": "g",
+                   "choices": [{"index": 0, "finish_reason": "tool_calls", "message": msg}]}
+        elif self.path.endswith("/v1/messages"):
             out = {"id": "m", "type": "message", "role": "assistant", "model": "c", "stop_reason": "end_turn",
                    "content": [{"type": "text", "text": "You said: " + said}], "usage": {"input_tokens": 1, "output_tokens": 1}}
         else:
@@ -211,6 +293,7 @@ EOF
     "$PYTHON" -I "$E/provider.py" "$E/up.log" > "$E/port" & UP=$!
     BODY_CAP="$(grep -o 'PORTCULLIS_MAX_BODY_BYTES:-[0-9]*' "${REPO_DIR}/portcullis-run.sh" | cut -d- -f2)"
     PORTCULLIS_PASSTHROUGH=1 PORTCULLIS_MAX_BODY_BYTES="$BODY_CAP" PORTCULLIS_STORE="$E/store.json" \
+        PORTCULLIS_ADMIN_TOKEN=e2e-admin \
         "$PORTCULLIS_BIN" serve --bind 127.0.0.1:18081 > "$E/pc.log" 2>&1 & PCP=$!
     for _ in $(seq 50); do [ -s "$E/port" ] && curl -s 127.0.0.1:18081/healthz >/dev/null && break; sleep 0.1; done
     PORT="$(cat "$E/port")"; touch "$E/home/portcullis/transparent"
@@ -227,10 +310,55 @@ r = oc.chat.completions.create(model="g", messages=[{"role": "user", "content": 
 print("big ok", len(r.choices[0].message.content))
 EOF
     eq "client exit" "0" "$?"
+
+    echo "== e2e: portcullis-ctl against the live gateway =="
+    pctl() { env PATH="${BIN}:$PATH" HERMES_HOME="$E/home" PORTCULLIS_ADMIN_TOKEN=e2e-admin CTL_LOG="$E/ctl.log" \
+        PORTCULLIS_GATEWAY=http://127.0.0.1:18081 bash "${REPO_DIR}/portcullis-ctl" "$@"; }
+    pctl teach Ann --label PERSON --whole-word > "$E/ctl.out" 2>&1 && ok "ctl teach" || bad "ctl teach: $(cat "$E/ctl.out")"
+    pctl teach "Project Loki" --label PROJECT > /dev/null 2>&1
+    pctl test "Project Loki: mail jane@acme.io from 10.0.1.3" > "$E/ctl.out" 2>&1
+    has "ctl test shows placeholders" "provider sees: <<PROJECT_1>>: mail <<EMAIL_1>> from <<IP_1>>" "$E/ctl.out"
+    pctl allow 10.0.1.3 > /dev/null 2>&1
+    pctl test "from 10.0.1.3" > "$E/ctl.out" 2>&1
+    has "ctl allow takes effect" "provider sees: from 10.0.1.3" "$E/ctl.out"
+    pctl terms > "$E/ctl.out" 2>&1
+    has "ctl terms lists taught" "Ann  ->  <<PERSON_n>> [whole word]" "$E/ctl.out"
+    has "ctl terms lists allowed" "10.0.1.3" "$E/ctl.out"
+    pctl status > "$E/ctl.out" 2>&1
+    has "ctl status: active" "Portcullis: ACTIVE" "$E/ctl.out"
+    pctl stats > "$E/ctl.out" 2>&1
+    has "ctl stats" "hidden since start" "$E/ctl.out"
+
+    echo "== e2e: agent traffic (JSON tool results, tool args, secrets, errors) =="
+    HERMES_HOME="$E/home" PORTCULLIS_GATEWAY=http://127.0.0.1:18081 PYTHONPATH="$REPO_DIR" "$PYTHON" - "$PORT" > "$E/agent.out" 2>&1 <<'PYEOF'
+import json, sys, portcullis_hook, openai
+oc = openai.OpenAI(base_url=f"http://127.0.0.1:{sys.argv[1]}/v1", api_key="k", max_retries=0)
+# Like Hermes: the tool result is JSON text, so each newline is the two characters \n.
+tool = json.dumps({"output": "owner:\nAnn\njane@acme.io", "exit_code": 0})
+assert chr(92) + "nAnn" in tool
+msgs = [{"role": "user", "content": "who owns it? key sk-proj-abc123DEF456ghi789JKL012mno345"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function",
+         "function": {"name": "terminal", "arguments": json.dumps({"cmd": "cat OWNERS"})}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": tool}]
+r = oc.chat.completions.create(model="g", messages=msgs, tool_choice="echo")
+args = json.loads(r.choices[0].message.tool_calls[0].function.arguments)
+print("roundtrip", args["echo"] == tool)
+try:
+    oc.chat.completions.create(model="g", messages=[{"role": "assistant", "content": None, "tool_calls": [
+        {"id": "c2", "type": "function", "function": {"name": "project loki search", "arguments": "{}"}}]}])
+    print("NOT BLOCKED")
+except openai.APIStatusError as e:
+    print("blocked", e.status_code, e.code, "nothing was sent" in str(e))
+PYEOF
+    has "tool result round-trips exactly, args valid JSON" "roundtrip True" "$E/agent.out"
+    has "blocked request: JSON error with code" "blocked 502 residual_term True" "$E/agent.out"
+    hasnt "whole-word term after a JSON newline escape never reached provider" "nAnn" "$E/up.log"
+    hasnt "email after a JSON newline escape never reached provider" "jane@acme.io" "$E/up.log"
+    hasnt "API key never reached provider" "sk-proj-abc123" "$E/up.log"
     has "openai reply rehydrated" "You said: mail jane.doe@acme.io" "$E/client.out"
     has "anthropic reply rehydrated" "You said: I am jane.doe@acme.io" "$E/client.out"
     has "~3 MiB prompt accepted (body cap raised)" "big ok" "$E/client.out"
-    eq "provider got 3 calls" "3" "$(wc -l < "$E/up.log")"
+    eq "provider got 4 calls (the blocked one never left)" "4" "$(wc -l < "$E/up.log")"
     hasnt "no raw email reached provider" "jane.doe@acme.io" "$E/up.log"
     has "client key forwarded" '"key": "Bearer sk-real"' "$E/up.log"
     has "client header forwarded" '"session": "s1"' "$E/up.log"
@@ -241,11 +369,11 @@ import sys, portcullis_hook, openai
 oc = openai.OpenAI(base_url=f"http://127.0.0.1:{sys.argv[1]}/v1", api_key="k", max_retries=0)
 try:
     oc.chat.completions.create(model="g", messages=[{"role": "user", "content": "x"}]); print("LEAKED")
-except openai.APIConnectionError:
-    print("failed closed")
+except openai.APIStatusError as e:
+    print("failed closed", e.status_code, "NOT sent" in str(e))
 EOF
-    has "gateway down -> fails closed" "failed closed" "$E/down.out"
-    eq "nothing sent around a dead gateway" "3" "$(wc -l < "$E/up.log")"
+    has "gateway down -> fails closed with a readable 503" "failed closed 503 True" "$E/down.out"
+    eq "nothing sent around a dead gateway" "4" "$(wc -l < "$E/up.log")"
     kill "$UP" 2>/dev/null
 fi
 

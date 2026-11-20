@@ -167,8 +167,10 @@ RUN chown -R hermes:hermes /opt/hermes-webui/venv
 # ---------------------------------------------------------------------------
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY start.sh /opt/hermes-suite/start.sh
-COPY portcullis-wire.py portcullis-run.sh portcullis_hook.py portcullis-hook-check.py /opt/hermes-suite/
-RUN chmod +x /opt/hermes-suite/start.sh /opt/hermes-suite/portcullis-run.sh
+COPY portcullis-wire.py portcullis-run.sh portcullis_hook.py portcullis-hook-check.py portcullis-ctl /opt/hermes-suite/
+COPY skills/portcullis/SKILL.md /opt/hermes-suite/skills/portcullis/SKILL.md
+RUN chmod +x /opt/hermes-suite/start.sh /opt/hermes-suite/portcullis-run.sh /opt/hermes-suite/portcullis-ctl && \
+    ln -sf /opt/hermes-suite/portcullis-ctl /usr/local/bin/portcullis-ctl
 
 # Portcullis binary (see Stage 0). Runs as a supervisord program on
 # 127.0.0.1:8080 only — never exposed — in transparent passthrough mode.

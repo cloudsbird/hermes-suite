@@ -11,8 +11,11 @@ the reply.
 
 Active only while ``$HERMES_HOME/portcullis/transparent`` exists (start.sh
 creates it when Portcullis is enabled), so turning Portcullis off needs no
-reinstall. Fails closed: if the gateway is down the call errors, it is never
-sent around it.
+reinstall. Fails closed: if the gateway is down the call is never sent around
+it. Instead of a bare connection error, the client gets a 503 in its
+provider's error format saying the message was NOT sent and what to do, so the
+reason shows up in the chat (the SDK retries a 503 a couple of times first,
+which also covers Portcullis restarting).
 
 Both ``httpx`` and ``httpx2`` are patched: openai<3 / anthropic<2 use httpx,
 newer SDK majors moved to httpx2 (same client API).
@@ -91,19 +94,55 @@ def _rewrite(httpx, request):
     request.headers["host"] = request.url.netloc.decode("ascii")
 
 
+DOWN_MESSAGE = (
+    "Portcullis (the PII filter in front of your model) is not running, so this "
+    "message was NOT sent. Check `portcullis-ctl status`; to send without "
+    "redaction, run `portcullis-ctl off`."
+)
+
+
+def _routed(httpx, request):
+    """Was this request re-pointed at the gateway by `_rewrite`?"""
+    return bool(request.headers.get(UPSTREAM_HEADER)) and request.url.host == httpx.URL(GATEWAY).host
+
+
+def _gateway_down(httpx, request):
+    """A 503 in the provider's own error shape. Nothing was sent anywhere."""
+    _warn_once("down", "Portcullis is not reachable at " + GATEWAY + "; LLM calls are blocked (fail-closed), not sent")
+    if request.url.path.endswith("/v1/messages"):
+        body = {"type": "error", "error": {"type": "api_error", "message": DOWN_MESSAGE}}
+    else:
+        body = {"error": {"message": DOWN_MESSAGE, "type": "portcullis_unavailable", "code": "portcullis_down"}}
+    return httpx.Response(503, json=body, request=request)
+
+
 def _patch(httpx):
     if getattr(httpx, "_portcullis_patched", False):
         return
     sync_send = httpx.Client.send
     async_send = httpx.AsyncClient.send
+    # Errors that mean the gateway never got the request (so nothing went upstream).
+    unreachable = tuple(
+        e for e in (getattr(httpx, "ConnectError", None), getattr(httpx, "ConnectTimeout", None)) if e
+    )
 
     def send(self, request, *args, **kwargs):
         _rewrite(httpx, request)
-        return sync_send(self, request, *args, **kwargs)
+        if not _routed(httpx, request):
+            return sync_send(self, request, *args, **kwargs)
+        try:
+            return sync_send(self, request, *args, **kwargs)
+        except unreachable:
+            return _gateway_down(httpx, request)
 
     async def asend(self, request, *args, **kwargs):
         _rewrite(httpx, request)
-        return await async_send(self, request, *args, **kwargs)
+        if not _routed(httpx, request):
+            return await async_send(self, request, *args, **kwargs)
+        try:
+            return await async_send(self, request, *args, **kwargs)
+        except unreachable:
+            return _gateway_down(httpx, request)
 
     httpx.Client.send = send
     httpx.AsyncClient.send = asend

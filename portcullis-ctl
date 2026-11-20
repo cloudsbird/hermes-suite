@@ -1,0 +1,313 @@
+#!/bin/bash
+# =============================================================================
+# portcullis-ctl — manage the Portcullis PII gateway inside the container
+#
+#   docker exec hermes-suite portcullis-ctl status     (or from the Hermes terminal)
+#
+# Reads the admin token itself, so teaching a term needs no curl or token
+# juggling. `off` / `on` persist across restarts through
+# $HERMES_HOME/portcullis/override; PORTCULLIS_ENABLED=false in the container
+# environment still wins over both.
+# =============================================================================
+set -u
+
+HERMES_HOME="${HERMES_HOME:-/opt/data}"
+STATE_DIR="$HERMES_HOME/portcullis"
+GATEWAY="${PORTCULLIS_GATEWAY:-http://127.0.0.1:8080}"
+GATEWAY="${GATEWAY%/}"
+MARKER="$STATE_DIR/transparent"
+OVERRIDE="$STATE_DIR/override"
+SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
+SUPERVISOR_SOCK="/var/run/supervisor/supervisor.sock"
+HOOK_CHECK="/opt/hermes-suite/portcullis-hook-check.py"
+PY="$(command -v python3 || echo /opt/hermes/.venv/bin/python3)"
+HEALTH_WAIT="${PORTCULLIS_CTL_HEALTH_WAIT:-90}"   # seconds; the ML model can take a while to load
+
+die() { echo "portcullis-ctl: $*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage: portcullis-ctl <command> [args]
+
+  status                     is redaction on, healthy, and loaded into Hermes?
+  off                        stop redacting (persists across restarts)
+  on                         start redacting again (waits until healthy)
+  test <text...>             show what the provider would receive for <text>
+  teach <term> [--label L] [--whole-word]
+                             always hide <term> (label default: PRIVATE)
+  unteach <term>             stop hiding a taught term
+  allow <term>               never hide <term> (e.g. an internal IP the agent needs)
+  unallow <term>             take <term> off the allow-list
+  terms                      list taught and allowed terms
+  suggestions                values hidden by patterns/ML that you never taught
+  stats                      what has been hidden and blocked since start
+EOF
+}
+
+# --- helpers -----------------------------------------------------------------
+
+# The env file is written by start.sh (printf %q, mode 600). Read single keys
+# from it in a subshell so nothing else leaks into this process.
+env_value() {
+    [ -r "$STATE_DIR/env" ] || return 0
+    ( . "$STATE_DIR/env" >/dev/null 2>&1; eval "printf '%s' \"\${$1:-}\"" )
+}
+
+admin_token() {
+    local t="${PORTCULLIS_ADMIN_TOKEN:-}"
+    [ -n "$t" ] || t="$(env_value PORTCULLIS_ADMIN_TOKEN)"
+    [ -n "$t" ] || t="$(cat "$STATE_DIR/admin_token" 2>/dev/null || true)"
+    [ -n "$t" ] || die "no admin token found (looked in \$PORTCULLIS_ADMIN_TOKEN, $STATE_DIR/env, $STATE_DIR/admin_token)"
+    printf '%s' "$t"
+}
+
+hard_disabled() { [ "$(env_value PORTCULLIS_ENABLED)" = "false" ]; }
+
+healthy() { curl -fsS --max-time 3 "$GATEWAY/healthz" >/dev/null 2>&1; }
+
+# Admin API call. The token goes in a header read from a file descriptor, never
+# on the command line (where `ps` would show it).
+api() {
+    local method="$1" path="$2" body="${3:-}" token out code
+    token="$(admin_token)" || exit 1
+    local data=()
+    if [ -n "$body" ]; then
+        data=(-H 'content-type: application/json' --data-binary @-)
+    fi
+    # The process substitution must live in the curl command itself: one created
+    # earlier (say, in an array) is closed before curl gets to read it.
+    out="$(printf '%s' "$body" | curl -sS --max-time 30 -X "$method" \
+        -H @<(printf 'Authorization: Bearer %s\n' "$token") "${data[@]}" \
+        -w '\n%{http_code}' "$GATEWAY$path" 2>&1)" \
+        || die "Portcullis is not reachable at $GATEWAY (run: portcullis-ctl status)"
+    code="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    if [ "${code:0:1}" != "2" ]; then
+        die "HTTP $code from $path: $out"
+    fi
+    printf '%s\n' "$out"
+}
+
+# Build a JSON object from key=value pairs (values are strings, or true/false).
+json_obj() {
+    "$PY" -I -c '
+import json, sys
+out = {}
+for kv in sys.argv[1:]:
+    k, v = kv.split("=", 1)
+    out[k] = {"true": True, "false": False}.get(v, v)
+print(json.dumps(out))' "$@"
+}
+
+pretty() { "$PY" -I -c "$1"; }
+
+supervisor() {
+    local cmd=(supervisorctl -c "$SUPERVISOR_CONF" "$@")
+    if [ "$(id -u)" = "0" ] || [ -w "$SUPERVISOR_SOCK" ]; then
+        "${cmd[@]}"
+    else
+        # Docker path: supervisord runs as root and its socket is root-only.
+        sudo -n "${cmd[@]}"
+    fi
+}
+
+# Write the override atomically, owned by hermes so either user can replace it.
+write_override() {
+    mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+    local tmp="$STATE_DIR/.override.$$"
+    printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$OVERRIDE" || die "cannot write $OVERRIDE"
+    if [ "$(id -u)" = "0" ] && id hermes >/dev/null 2>&1; then
+        chown hermes:hermes "$OVERRIDE" 2>/dev/null || true
+    fi
+}
+
+override_value() { [ -r "$OVERRIDE" ] && tr -d '[:space:]' < "$OVERRIDE"; true; }
+
+hook_loaded() {
+    local py missing=""
+    for py in /opt/hermes/.venv/bin/python3 /opt/hermes-webui/venv/bin/python3; do
+        if [ -x "$py" ] && ! "$py" "$HOOK_CHECK" >/dev/null 2>&1; then
+            missing="$missing $py"
+        fi
+    done
+    printf '%s' "$missing"
+}
+
+# --- commands ----------------------------------------------------------------
+
+cmd_status() {
+    local routing="off" health="not reachable" ov hook terms=""
+    [ -e "$MARKER" ] && routing="on"
+    ov="$(override_value)"
+    if healthy; then
+        health="healthy"
+        terms="$(curl -fsS --max-time 3 "$GATEWAY/healthz" 2>/dev/null \
+            | "$PY" -I -c 'import json,sys; print(json.load(sys.stdin).get("store_terms","?"))' 2>/dev/null)"
+    fi
+    hook="$(hook_loaded)"
+
+    echo "routing:   $routing   (marker $MARKER)"
+    echo "gateway:   $health   ($GATEWAY)"
+    [ -n "$terms" ] && echo "taught:    $terms term(s)"
+    echo "override:  ${ov:-none}"
+    if hard_disabled; then echo "env:       PORTCULLIS_ENABLED=false"; fi
+    if [ -n "$hook" ]; then echo "hook:      NOT loaded in:$hook"; else echo "hook:      loaded"; fi
+    echo
+
+    if hard_disabled; then
+        echo "Portcullis: OFF (PORTCULLIS_ENABLED=false in the container environment)"
+    elif [ "$routing" = "off" ]; then
+        echo "Portcullis: OFF${ov:+ (portcullis-ctl $ov)} — LLM calls go to the provider unredacted"
+    elif [ "$health" != "healthy" ]; then
+        echo "Portcullis: BROKEN — routing is on but the gateway is down, so every chat fails."
+        echo "            Check the container log, or run: portcullis-ctl off"
+        return 1
+    elif [ -n "$hook" ]; then
+        echo "Portcullis: PARTIAL — the hook is not loaded everywhere; those calls are NOT redacted"
+        return 1
+    else
+        echo "Portcullis: ACTIVE — every LLM call is redacted"
+    fi
+}
+
+cmd_off() {
+    write_override off
+    rm -f "$MARKER"
+    echo "routing stopped: LLM calls now go straight to your provider (unredacted)"
+    if supervisor stop portcullis >/dev/null 2>&1; then
+        echo "Portcullis process stopped"
+    else
+        echo "note: could not stop the Portcullis process (it is idle and harmless)"
+    fi
+    echo "stays off across restarts; undo with: portcullis-ctl on"
+}
+
+cmd_on() {
+    if hard_disabled; then
+        die "PORTCULLIS_ENABLED=false is set in the container environment. Remove it and redeploy; portcullis-ctl cannot override it."
+    fi
+    write_override on
+    if ! healthy; then
+        supervisor start portcullis >/dev/null 2>&1 \
+            || echo "note: could not start the process through supervisorctl; waiting in case it is already starting"
+        local waited=0
+        until healthy; do
+            if [ "$waited" -ge "$HEALTH_WAIT" ]; then
+                rm -f "$MARKER"
+                die "Portcullis did not become healthy within ${HEALTH_WAIT}s; routing NOT enabled (chats still work, unredacted). Check the container log."
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+    fi
+    # Only route once the gateway answers: routing to a dead gateway fails every chat.
+    : > "$MARKER" || die "cannot create $MARKER"
+    if [ "$(id -u)" = "0" ] && id hermes >/dev/null 2>&1; then
+        chown hermes:hermes "$MARKER" 2>/dev/null || true
+    fi
+    echo "Portcullis is on: every LLM call is redacted"
+}
+
+cmd_teach() {
+    local term="" label="PRIVATE" whole=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --label) [ $# -ge 2 ] || die "--label needs a value"; label="$2"; shift 2 ;;
+            --label=*) label="${1#--label=}"; shift ;;
+            --whole-word) whole=true; shift ;;
+            -*) die "unknown option: $1" ;;
+            *) [ -z "$term" ] || die "one term at a time (quote multi-word terms)"; term="$1"; shift ;;
+        esac
+    done
+    [ -n "$term" ] || die "usage: portcullis-ctl teach <term> [--label L] [--whole-word]"
+    api POST /teach "$(json_obj "term=$term" "label=$label" "whole_word=$whole")" >/dev/null
+    echo "taught: '$term' is now hidden as <<${label^^}_n>> (applies from the next request)"
+}
+
+cmd_unteach() {
+    [ $# -eq 1 ] || die "usage: portcullis-ctl unteach <term>"
+    api POST /unteach "$(json_obj "term=$1")" \
+        | pretty 'import json,sys; print("removed" if json.load(sys.stdin).get("removed") else "not a taught term")'
+}
+
+cmd_allow() {
+    [ $# -eq 1 ] || die "usage: portcullis-ctl allow <term>"
+    api POST /allow "$(json_obj "term=$1")" >/dev/null
+    echo "allowed: '$1' will no longer be hidden"
+}
+
+cmd_unallow() {
+    [ $# -eq 1 ] || die "usage: portcullis-ctl unallow <term>"
+    api POST /unallow "$(json_obj "term=$1")" \
+        | pretty 'import json,sys; print("removed" if json.load(sys.stdin).get("removed") else "not on the allow-list")'
+}
+
+cmd_terms() {
+    api GET /terms | pretty '
+import json, sys
+d = json.load(sys.stdin)
+terms, allow = d.get("terms", []), d.get("allow", [])
+print(f"taught ({len(terms)}):")
+for t in terms:
+    term, label = t["term"], t["label"]
+    extra = " [whole word]" if t.get("whole_word") else ""
+    print(f"  {term}  ->  <<{label}_n>>{extra}")
+print(f"allowed ({len(allow)}):")
+for t in allow:
+    print("  " + t["term"])'
+}
+
+cmd_suggestions() {
+    api GET /suggestions | pretty '
+import json, sys
+s = json.load(sys.stdin).get("suggestions", [])
+if not s:
+    print("no suggestions")
+for t in s:
+    print(" ", t)'
+}
+
+cmd_test() {
+    [ $# -ge 1 ] || die "usage: portcullis-ctl test <text...>"
+    api POST /scan "$(json_obj "text=$*")" | pretty '
+import json, sys
+d = json.load(sys.stdin)
+print("provider sees:", d["redacted"])
+counts = d.get("counts", {})
+print("hidden:", ", ".join(f"{k} x{v}" for k, v in counts.items()) if counts else "nothing")'
+}
+
+cmd_stats() {
+    local m
+    m="$(curl -fsS --max-time 5 "$GATEWAY/metrics" 2>/dev/null)" \
+        || die "Portcullis is not reachable at $GATEWAY (run: portcullis-ctl status)"
+    printf '%s\n' "$m" | "$PY" -I -c '
+import re, sys
+rows = {"redactions": {}, "blocked": {}, "upstream": {}}
+for line in sys.stdin:
+    m = re.match(r"portcullis_(redactions|blocked|upstream_responses)_total\{(\w+)=\"([^\"]*)\"\} (\S+)", line)
+    if m:
+        kind = {"upstream_responses": "upstream"}.get(m.group(1), m.group(1))
+        rows[kind][m.group(3)] = int(float(m.group(4)))
+def show(title, d):
+    print(title + ":", ", ".join(f"{k} {v}" for k, v in sorted(d.items(), key=lambda kv: -kv[1])) or "none")
+show("hidden since start", rows["redactions"])
+show("requests blocked", rows["blocked"])
+show("provider responses", rows["upstream"])'
+}
+
+case "${1:-}" in
+    status) shift; cmd_status "$@" ;;
+    off) shift; cmd_off "$@" ;;
+    on) shift; cmd_on "$@" ;;
+    teach) shift; cmd_teach "$@" ;;
+    unteach) shift; cmd_unteach "$@" ;;
+    allow) shift; cmd_allow "$@" ;;
+    unallow) shift; cmd_unallow "$@" ;;
+    terms) shift; cmd_terms "$@" ;;
+    suggestions) shift; cmd_suggestions "$@" ;;
+    test) shift; cmd_test "$@" ;;
+    stats) shift; cmd_stats "$@" ;;
+    -h|--help|help|"") usage ;;
+    *) usage >&2; exit 2 ;;
+esac

@@ -8,3 +8,5 @@ build.sh
 up.sh
 down.sh
 logs.sh
+# The Portcullis skill ships in the image (the *.md rule above only covers the root).
+!skills/portcullis/SKILL.md

@@ -246,10 +246,19 @@ examples if they don't already exist.
 The image includes [Portcullis](https://github.com/cloudsbird/Portcullis), a
 local PII gateway. It is **on by default** and **transparent**: Hermes keeps
 its own provider configuration (URL, key, headers) and does not know
-Portcullis is there. Before a prompt leaves the container, private values such
-as emails, phone numbers, keys and terms you taught are replaced with
-placeholders like `<<EMAIL_1>>`. The real values are put back into the reply,
-so the provider sees the task but never the identities.
+Portcullis is there. Before a prompt leaves the container, private values are
+replaced with placeholders like `<<EMAIL_1>>`, and the real values are put back
+into the reply, so the provider sees the task but never the identities.
+
+**What is hidden.** Emails, phone numbers, card numbers, routable IP addresses,
+**secrets** (OpenAI/Anthropic/OpenRouter keys, AWS key IDs, GitHub/GitLab/Slack/
+Google/Stripe tokens, JWTs, private keys, the password in `user:pass@host`,
+`Bearer` tokens, `PASSWORD=…`-style values) and every term you **teach**
+(client names, projects, colleagues). Things an agent needs to read its own
+logs and config are left alone on purpose: timestamps, `127.0.0.1`/`0.0.0.0`,
+netmasks, package pins like `react@18.3.1`, `git@github.com:` remotes, build
+numbers, UUIDs and hashes. Tool output (which Hermes sends as JSON text) is
+scanned in decoded form, so values at the start of a line are caught too.
 
 **How it works.** A small hook (`portcullis_hook.py`) is loaded into the Hermes
 and WebUI Python environments. Just before an LLM request is sent
@@ -268,35 +277,67 @@ headers**, then rehydrates the reply. So:
 
 The startup banner shows `Portcullis: … active — every LLM call is redacted`.
 
-**Turning it off.** Set `PORTCULLIS_ENABLED=false` in `versions.env` (for
-`./up.sh`) or in the compose environment, then restart. For a quick test without
-a restart, `touch`/`rm` the file `~/.hermes/portcullis/transparent` (the hook
-checks it on every request).
+### `portcullis-ctl`
 
-**Teaching it your private terms** (client names, projects, colleagues). Any
-term you teach is redacted on every later request:
+Everything is managed with one command inside the container. Run it with
+`docker exec` (or `podman exec`) from the host, or ask Hermes to run it in its
+terminal. It reads the admin token itself.
 
 ```bash
-podman exec hermes-suite sh -c 'curl -s -X POST 127.0.0.1:8080/teach \
-  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)" \
-  -H "content-type: application/json" -d "{\"term\":\"Project Loki\",\"label\":\"ORG\"}"'
+docker exec hermes-suite portcullis-ctl status        # on? healthy? hook loaded?
+docker exec hermes-suite portcullis-ctl off           # stop redacting (survives restarts)
+docker exec hermes-suite portcullis-ctl on            # turn it back on (waits until healthy)
 
-# list taught terms / terms it spotted but you have not taught yet
-podman exec hermes-suite sh -c 'curl -s 127.0.0.1:8080/terms \
-  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)"'
-podman exec hermes-suite sh -c 'curl -s 127.0.0.1:8080/suggestions \
-  -H "Authorization: Bearer $(cat /opt/data/portcullis/admin_token)"'
+docker exec hermes-suite portcullis-ctl teach "Project Loki" --label PROJECT
+docker exec hermes-suite portcullis-ctl teach Ann --label PERSON --whole-word
+docker exec hermes-suite portcullis-ctl test "mail dana@acme.io about Project Loki"
+#   provider sees: mail <<EMAIL_1>> about <<PROJECT_1>>
+docker exec hermes-suite portcullis-ctl allow 10.0.1.3   # never hide this value
+docker exec hermes-suite portcullis-ctl terms            # taught and allowed terms
+docker exec hermes-suite portcullis-ctl suggestions      # values hidden that you never taught
+docker exec hermes-suite portcullis-ctl stats            # hidden / blocked since start
 ```
+
+Teaching applies from the next request, including to history that is re-sent.
+`--whole-word` keeps a short name such as `Ann` from matching inside
+`Announcement`. Hermes also gets a `portcullis` skill, so you can say "keep
+Project Loki private" in chat and it runs `teach` for you (the message in which
+you named the term has already gone to the provider once).
+
+**Turning it off.** `portcullis-ctl off` stops routing at once, stops the
+process, and stays off across restarts until `portcullis-ctl on`. No redeploy
+is needed. To remove it for good, set `PORTCULLIS_ENABLED=false` in
+`versions.env` (for `./up.sh`) or in the compose environment and redeploy; that
+setting wins over `portcullis-ctl on`.
 
 The admin token is generated into `~/.hermes/portcullis/admin_token` on
 first start; set `PORTCULLIS_ADMIN_TOKEN` to choose your own. Taught terms
 live in `~/.hermes/portcullis/store.json`. That file is a map of everything
 you consider private, so treat it as a secret.
 
-**Optional ML detector.** By default only Portcullis' deterministic layers run:
-taught terms plus regex for emails, phones, keys and so on, using about 13 MB of
-RAM. The binary is built with ONNX support. To add the GLiNER2 detector (about
-1.2 GB on disk and about 1.6 GB of RAM), export the model as described in the
+### Troubleshooting
+
+When Portcullis stops a request, nothing is sent to the provider. The error
+says why; depending on how the WebUI or messaging platform shows provider
+errors, you see it in the chat or in the container log (`docker logs`):
+
+| Message starts with | Cause | What to do |
+|---|---|---|
+| `Portcullis (the PII filter …) is not running, so this message was NOT sent` | the gateway is down (crash, restart, out of memory) | `portcullis-ctl status`; check the container log; `portcullis-ctl off` to keep chatting without redaction |
+| `Portcullis blocked this request … a term you taught is still present (in …name)` | a taught term is in a tool or message name, which cannot be replaced | rename it, or `portcullis-ctl unteach` / `allow` the term |
+| `… (in …reasoning…)` / `… (in …thinking…)` | a taught term is in signed reasoning from an earlier turn | start a new conversation |
+| `… unfinished placeholder such as <<EMAIL_1` | a half placeholder was pasted into the chat | remove it |
+| `… the ML detector failed and PORTCULLIS_DETECTOR_FAIL_CLOSED is on` | the optional ML detector errored | retry; check the log |
+
+Something hidden that the model needs to see (an internal IP, a hostname)?
+`portcullis-ctl allow <value>`. Want to know what would be sent?
+`portcullis-ctl test "<text>"`.
+
+**Optional ML detector.** By default only Portcullis' deterministic layers run
+(taught terms plus the patterns above), using about 13 MB of RAM. The binary is
+built with ONNX support. To add the GLiNER2 detector, which also finds names
+and organisations you never taught (about 1.2 GB on disk and about 1.6 GB of
+RAM), export the model as described in the
 [Portcullis docs](https://github.com/cloudsbird/Portcullis#the-detector-model),
 put it under `~/.hermes/portcullis/model/`, and set
 `PORTCULLIS_MODEL_DIR=/opt/data/portcullis/model` in the compose environment.
@@ -313,12 +354,11 @@ and regex coverage (and rescans that text next turn). Set
 - Only Python processes in the Hermes/WebUI venvs are hooked. A tool that calls
   an LLM from another runtime (Node, curl) goes direct.
 - If Portcullis is down while the hook is active, model calls fail rather than
-  bypass it. That is fail closed, by design. supervisord restarts it.
-- Message text, tool-call arguments and replayed reasoning are redacted. A taught
-  term anywhere else (tool definitions, signed reasoning from Claude/Gemini
-  models via OpenRouter, which cannot be edited) blocks the request instead:
-  HTTP 502 `residual protected term in outbound at <field>`. Nothing is sent.
-  For signed reasoning, start a new conversation; otherwise report the field.
+  bypass it (fail closed, by design). supervisord restarts it.
+- Text inside images is not redacted; images are forwarded unchanged.
+- Some values are trade-offs: a bare digit run like `4155550132` counts as a
+  phone only with a leading `+` (written `415-555-0132` it is always hidden),
+  and a four-part version like `1.2.3.4` looks like an IP and is hidden.
 - Port 8080 is never published: Portcullis only listens on loopback. Do not add
   a port mapping for it.
 
@@ -640,6 +680,8 @@ hermes-suite/
   portcullis-run.sh    — supervisord launcher for Portcullis (passthrough mode)
   portcullis-hook-check.py — Proves the hook really loaded (build time + startup banner)
   portcullis-wire.py   — One-time migration: restores config.yaml rewired by older releases
+  portcullis-ctl       — In-container CLI: status, on/off, teach, test, allow, stats
+  skills/portcullis/   — Hermes skill: teach private terms from chat
   docker-compose.yaml  — Podman/Docker Compose configuration (local use)
   docker-compose.dokploy.yaml — Compose variant for Dokploy/remote VPS deploys
   build.sh             — Build helper script (reads versions.env)
