@@ -70,7 +70,7 @@ If you prefer not to build manually, use our pre-verified image tags from
 [GitHub Container Registry](https://github.com/cloudsbird/hermes-suite/pkgs/container/hermes-suite):
 
 ```bash
-podman pull ghcr.io/cloudsbird/hermes-suite:0.23.2-0.52.701-r1
+podman pull ghcr.io/cloudsbird/hermes-suite:0.23.3-0.52.702-r1
 ```
 
 ### Manual Build with Specific Versions
@@ -79,9 +79,9 @@ If you need a specific combination, pass the versions as build arguments:
 
 ```bash
 podman build \
-  --build-arg AGENT_VERSION=v0.23.2 \
-  --build-arg HERMES_WEBUI_VERSION=v0.52.701 \
-  -t hermes-suite:0.23.2-0.52.701 .
+  --build-arg AGENT_VERSION=v0.23.3 \
+  --build-arg HERMES_WEBUI_VERSION=v0.52.702 \
+  -t hermes-suite:0.23.3-0.52.702 .
 ```
 
 Or use the build helper (reads from `versions.env`):
@@ -97,7 +97,7 @@ Or use the build helper (reads from `versions.env`):
 ./build.sh --docker-nolog
 
 # Override defaults:
-# ./build.sh --agent v0.23.2 --webui v0.52.701
+# ./build.sh --agent v0.23.3 --webui v0.52.702
 ```
 
 > **Docker compatibility:** Docker CE is auto-detected at container startup via /proc/1/cgroup.
@@ -111,15 +111,15 @@ Every release is an explicitly tested pair of Agent + WebUI on both amd64 and ar
 
 | Suite Tag | Agent Version | WebUI Version | Tested |
 |-----------|---------------|---------------|--------|
-| `0.23.2-0.52.701-r1` | v0.23.2 | v0.52.701 | amd64 + arm64 |
+| `0.23.3-0.52.702-r1` | v0.23.3 | v0.52.702 | amd64 + arm64 |
 
 > **Full version history:** https://github.com/sunnysktsang/hermes-suite/releases
 
 ### Version Tag Format
 
 Suite tags follow the pattern `{agent_date}-{webui_semver}`:
-- **Agent**: date-based version from `nousresearch/hermes-agent` (e.g. `v0.23.2`)
-- **WebUI**: semantic version from `nesquena/hermes-webui` (e.g. `v0.52.701`)
+- **Agent**: date-based version from `nousresearch/hermes-agent` (e.g. `v0.23.3`)
+- **WebUI**: semantic version from `nesquena/hermes-webui` (e.g. `v0.52.702`)
 
 The pinned pair for each release is declared in `versions.env`.
 
@@ -143,9 +143,9 @@ Or manually with pinned versions:
 
 ```bash
 podman build \
-  --build-arg AGENT_VERSION=v0.23.2 \
-  --build-arg HERMES_WEBUI_VERSION=v0.52.701 \
-  -t ghcr.io/cloudsbird/hermes-suite:0.23.2-0.52.701 .
+  --build-arg AGENT_VERSION=v0.23.3 \
+  --build-arg HERMES_WEBUI_VERSION=v0.52.702 \
+  -t ghcr.io/cloudsbird/hermes-suite:0.23.3-0.52.702 .
 ```
 
 ### 3. Start the container
@@ -348,8 +348,8 @@ podman exec hermes-suite supervisorctl status
 Edit `versions.env` to change the pinned versions and runtime settings:
 
 ```env
-AGENT_VERSION=v0.23.2
-WEBUI_VERSION=v0.52.701
+AGENT_VERSION=v0.23.3
+WEBUI_VERSION=v0.52.702
 
 # Runtime selector: auto (default), podman, docker, docker-nolog
 CONTAINER_RUNTIME=auto
@@ -375,7 +375,7 @@ ENABLE_BROWSER=true
 | `USE_SUDO` | `true`, `false` | `false` | Run docker/podman commands with sudo (rootful mode) |
 | `DASHBOARD_CREDENTIAL` | `admin:admin`, `auto`, `user:pass` | `admin:admin` | Dashboard login credential |
 | `ENABLE_WHATSAPP_BRIDGE` | `true`, `false` | `false` | Include WhatsApp bridge in the built image |
-| `ENABLE_BROWSER` | `true`, `false` | `true` | Keep local Chromium. `false` builds a `-slim` image without the base image's pinned Chromium, for low-resource edge devices. Since v0.23.2 Chromium ships in the base image's layers, so `-slim` no longer reduces pull size. |
+| `ENABLE_BROWSER` | `true`, `false` | `true` | Keep local Chromium. `false` builds a `-slim` image without the base image's pinned Chromium, for low-resource edge devices. Since v0.23.3 Chromium ships in the base image's layers, so `-slim` no longer reduces pull size. |
 
 Then rebuild:
 
@@ -414,7 +414,7 @@ ENABLE_WHATSAPP_BRIDGE=true
 
 ### Browser tooling and the -slim image
 
-Set `ENABLE_BROWSER=false` (or run `./build.sh --no-browser`) to build an image without local browser tooling. The build removes the base image's pinned Chromium and tags the result with a `-slim` suffix (before v0.23.2 this saved ~1.1GB on arm64; since v0.23.2 Chromium ships in the base image's own layers, so removing it no longer reduces pull or disk size — `-slim` now only guarantees no local browser is present). This is intended for low-resource edge devices, which can use a cloud browser backend instead of local Chromium. The default (`true`) keeps the base image's Chromium.
+Set `ENABLE_BROWSER=false` (or run `./build.sh --no-browser`) to build an image without local browser tooling. The build removes the base image's pinned Chromium and tags the result with a `-slim` suffix (before v0.23.3 this saved ~1.1GB on arm64; since v0.23.3 Chromium ships in the base image's own layers, so removing it no longer reduces pull or disk size — `-slim` now only guarantees no local browser is present). This is intended for low-resource edge devices, which can use a cloud browser backend instead of local Chromium. The default (`true`) keeps the base image's Chromium.
 
 ```bash
 # Option 1: CLI flag
@@ -502,7 +502,7 @@ for a remote VPS deploy instead of local Podman/Docker use:
    ```env
    # Pin a different image tag (see the Version Compatibility Table above),
    # or add -slim for the browser-less variant.
-   HERMES_SUITE_IMAGE_TAG=0.23.2-0.52.701-r1
+   HERMES_SUITE_IMAGE_TAG=0.23.3-0.52.702-r1
 
    # Avoid host port collisions with other apps on the same VPS.
    GATEWAY_PORT=8642
